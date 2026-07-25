@@ -1,0 +1,39 @@
+bin/
+obj/
+
+# User-specific IDE files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+
+# Build and publish outputs
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Pp]ublish/
+.publish/
+.release-upload/
+debug-review/
+
+# The updater is distributed separately and must not be committed to the helper repository.
+Updater/
+Package-Release.ps1
+HD2 Helper Updater.exe
+
+# Release executables and archives are attached to GitHub Releases instead of Git history.
+HD2 Helper.exe
+HD2.Helper.zip
+release-info.json
+/warning.mp3
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# OS files
+Thumbs.db
+Desktop.ini

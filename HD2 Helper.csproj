@@ -1,0 +1,42 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>WinExe</OutputType>
+		<TargetFramework>net8.0-windows10.0.17763.0</TargetFramework>
+		<UseWindowsForms>true</UseWindowsForms>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<NoWarn>$(NoWarn);MSB3277</NoWarn>
+		<ApplicationManifest>app.manifest</ApplicationManifest>
+		<ApplicationIcon>icon.ico</ApplicationIcon>
+
+		<PublishSingleFile>true</PublishSingleFile>
+		<SelfContained>true</SelfContained>
+		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
+		<IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+		<PublishReferencesDocumentationFiles>false</PublishReferencesDocumentationFiles>
+
+		<DebugType>none</DebugType>
+		<DebugSymbols>false</DebugSymbols>
+		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+		<Version>2.0.10</Version>
+		<GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<!-- 별도 실행 파일인 Updater 프로젝트의 소스와 obj 생성물을 헬퍼 빌드에서 제외한다. -->
+		<Compile Remove="Updater\**\*.cs" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<EmbeddedResource Include="index.html" />
+		<!-- 자동선택 좌표는 실행 폴더의 database.json을 읽으므로 publish/빌드 결과에도 최신 DB를 함께 복사한다. -->
+		<Content Include="database.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+		<Content Include="icon.ico" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3967.48" />
+		<PackageReference Include="ppy.SDL2-CS" Version="1.0.82" ExcludeAssets="ContentFiles" />
+	</ItemGroup>
+</Project>

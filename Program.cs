@@ -160,7 +160,8 @@ namespace HD2_Helper
 
         private const int BaseClientWidth = 950;
         private const int ExpandedSettingsClientWidth = 1060;
-        private const int BaseClientHeight = 590;
+        // 장비 프리셋 탭 행을 추가했으므로 편집창과 원본 창의 기준 높이도 함께 늘린다.
+        private const int BaseClientHeight = 630;
         private const int BaseReferenceWidth = 1920;
         private const int BaseReferenceHeight = 1080;
         private const double MinClientScale = 0.5;
@@ -212,6 +213,8 @@ namespace HD2_Helper
         private static bool _muteGameAudioWhenInactive;
         private static bool _excludeOverlaysFromCapture;
         private static string _selectedPresetId = "";
+        // 스트라타젬과 장비는 독립적으로 조합할 수 있으므로 마지막 선택값도 각각 보존한다.
+        private static string _selectedEquipmentPresetId = "";
         private static CrosshairSettings _crosshairSettings = new();
         private static SupportWeaponAssistSettings _supportWeaponSettings = new();
         private static readonly object SupportWarningMediaPlayersLock = new();
@@ -1134,7 +1137,7 @@ namespace HD2_Helper
                 }
                 else if (type == "SAVE_PRESETS")
                 {
-                    if (doc.RootElement.TryGetProperty("presets", out var presetsElement) && presetsElement.ValueKind == JsonValueKind.Array)
+                    if (doc.RootElement.TryGetProperty("presets", out var presetsElement) && presetsElement.ValueKind == JsonValueKind.Object)
                     {
                         SavePresets(presetsElement.GetRawText());
                         // 별도 편집창에서 저장한 프리셋도 원본 창에 곧바로 반영한다.
@@ -1154,6 +1157,20 @@ namespace HD2_Helper
                         SaveSetting();
                         SendSettingsToWeb();
                         SendPresetSelectionToWeb(_selectedPresetId);
+                    }
+                }
+                else if (type == "SET_SELECTED_EQUIPMENT_PRESET")
+                {
+                    string nextPresetId = doc.RootElement.TryGetProperty("id", out var idElement)
+                        ? idElement.GetString() ?? ""
+                        : "";
+
+                    if (!string.Equals(_selectedEquipmentPresetId, nextPresetId, StringComparison.Ordinal))
+                    {
+                        _selectedEquipmentPresetId = nextPresetId;
+                        SaveSetting();
+                        SendSettingsToWeb();
+                        SendEquipmentPresetSelectionToWeb(_selectedEquipmentPresetId);
                     }
                 }
                 else if (type == "SET_CROSSHAIR_SETTINGS")
@@ -1337,19 +1354,29 @@ namespace HD2_Helper
 
         private static string LoadPresetsJson()
         {
-            if (!File.Exists(PresetsPath)) return "[]";
+            if (!File.Exists(PresetsPath)) return "{\"stratagemPresets\":[],\"equipmentPresets\":[]}";
 
             string json = File.ReadAllText(PresetsPath, Encoding.UTF8);
-            if (string.IsNullOrWhiteSpace(json)) return "[]";
+            if (string.IsNullOrWhiteSpace(json)) return "{\"stratagemPresets\":[],\"equipmentPresets\":[]}";
 
             using var doc = JsonDocument.Parse(json);
-            return doc.RootElement.ValueKind == JsonValueKind.Array ? json : "[]";
+            // 이전 배열 형식은 읽기 호환성을 유지하고, 새 저장부터 두 컬렉션 객체 형식으로 기록한다.
+            return doc.RootElement.ValueKind is JsonValueKind.Array or JsonValueKind.Object
+                ? json
+                : "{\"stratagemPresets\":[],\"equipmentPresets\":[]}";
         }
 
         private static void SavePresets(string json)
         {
             using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.ValueKind != JsonValueKind.Array) return;
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return;
+            if (!doc.RootElement.TryGetProperty("stratagemPresets", out var stratagemPresets)
+                || stratagemPresets.ValueKind != JsonValueKind.Array
+                || !doc.RootElement.TryGetProperty("equipmentPresets", out var equipmentPresets)
+                || equipmentPresets.ValueKind != JsonValueKind.Array)
+            {
+                return;
+            }
 
             Directory.CreateDirectory(AppDataPath);
 
@@ -1357,7 +1384,7 @@ namespace HD2_Helper
                 ? File.ReadAllText(PresetsPath, Encoding.UTF8)
                 : "[]";
 
-            if (ShouldRejectSuspiciousPresetOverwrite(existingJson, doc.RootElement))
+            if (ShouldRejectSuspiciousPresetOverwrite(existingJson, stratagemPresets))
             {
                 SaveRejectedPresets(json);
                 return;
@@ -1372,10 +1399,11 @@ namespace HD2_Helper
             try
             {
                 using var existingDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(existingJson) ? "[]" : existingJson);
-                if (existingDoc.RootElement.ValueKind != JsonValueKind.Array)
+                JsonElement existingPresets = GetStratagemPresetsElement(existingDoc.RootElement);
+                if (existingPresets.ValueKind != JsonValueKind.Array)
                     return false;
 
-                int existingCount = existingDoc.RootElement.GetArrayLength();
+                int existingCount = existingPresets.GetArrayLength();
                 int incomingCount = incomingPresets.GetArrayLength();
                 if (existingCount <= 1 || incomingCount != 1)
                     return false;
@@ -1498,6 +1526,10 @@ namespace HD2_Helper
                 {
                     // 선택 프리셋은 숫자 키 설정과 달리 문자열 id라서 그대로 읽는다.
                     _selectedPresetId = value;
+                }
+                else if (key.Equals("selectedEquipmentPresetId", StringComparison.OrdinalIgnoreCase))
+                {
+                    _selectedEquipmentPresetId = value;
                 }
                 else if (key.Equals("stratagemCompactLayout", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1644,8 +1676,9 @@ namespace HD2_Helper
                 $"crosshairToggleKey={_crosshairToggleKey}",
                 $"helperEditorKey={_helperEditorKey}",
                 $"presetOverlayKey={_presetOverlayKey}",
-                // 마지막 선택 프리셋을 저장해 재실행 시 같은 탭을 다시 고를 수 있게 한다.
-                $"selectedPresetId={_selectedPresetId}"
+                // 두 종류 프리셋의 선택을 따로 저장해 재실행 후에도 같은 조합을 복원한다.
+                $"selectedPresetId={_selectedPresetId}",
+                $"selectedEquipmentPresetId={_selectedEquipmentPresetId}"
             };
 
             foreach (var (type, settings) in _ocrRegionSettings.OrderBy(item => item.Key, StringComparer.Ordinal))
@@ -1874,6 +1907,7 @@ namespace HD2_Helper
                 muteGameAudioWhenInactive = _muteGameAudioWhenInactive,
                 excludeOverlaysFromCapture = _excludeOverlaysFromCapture,
                 selectedPresetId = _selectedPresetId,
+                selectedEquipmentPresetId = _selectedEquipmentPresetId,
                 crosshair = _crosshairSettings.Normalized(),
                 supportWeapon = supportWeaponSettings.Normalized(),
                 waitingTarget = _isWaitingForKey ? _waitingKeyTarget : null,
@@ -1946,6 +1980,25 @@ namespace HD2_Helper
             {
                 _supportWeaponSettings = new SupportWeaponAssistSettings();
             }
+        }
+
+        private static JsonElement GetStratagemPresetsElement(JsonElement root)
+        {
+            if (root.ValueKind == JsonValueKind.Array) return root;
+            return root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("stratagemPresets", out var presets)
+                && presets.ValueKind == JsonValueKind.Array
+                ? presets
+                : default;
+        }
+
+        private static JsonElement GetEquipmentPresetsElement(JsonElement root)
+        {
+            return root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("equipmentPresets", out var presets)
+                && presets.ValueKind == JsonValueKind.Array
+                ? presets
+                : default;
         }
 
         private static void SaveSupportWeaponSettings()
@@ -3382,8 +3435,9 @@ namespace HD2_Helper
                 return;
 
             // 포커스 감시 타이머가 반복 호출하므로, 실제로 새로 띄울 때만 프리셋 카드를 다시 만든다.
-            var presets = LoadPresetSummaries();
-            if (presets.Count == 0)
+            var stratagemPresets = LoadPresetSummaries();
+            var equipmentPresets = LoadEquipmentPresetSummaries();
+            if (stratagemPresets.Count == 0 && equipmentPresets.Count == 0)
             {
                 _presetOverlayRequestedVisible = false;
                 return;
@@ -3394,14 +3448,17 @@ namespace HD2_Helper
             if (_presetOverlayForm == null || _presetOverlayForm.IsDisposed)
             {
                 // 게임 중에도 프리셋을 고를 수 있도록 별도 오버레이 창에서 작은 이미지 카드로 보여준다.
-                _presetOverlayForm = new PresetOverlayForm(ApplyPresetFromOverlay, () => _presetOverlayRequestedVisible = false);
+                _presetOverlayForm = new PresetOverlayForm(
+                    ApplyStratagemPresetFromOverlay,
+                    ApplyEquipmentPresetFromOverlay,
+                    () => _presetOverlayRequestedVisible = false);
                 _presetOverlayForm.FormClosed += (_, _) =>
                 {
                     _presetOverlayForm = null;
                     _presetOverlayRequestedVisible = false;
                 };
             }
-            _presetOverlayForm.UpdatePresets(presets, _selectedPresetId);
+            _presetOverlayForm.UpdatePresets(stratagemPresets, equipmentPresets, _selectedPresetId, _selectedEquipmentPresetId);
             if (!_presetOverlayForm.Visible)
             {
                 _presetOverlayForm.Show();
@@ -3508,10 +3565,11 @@ namespace HD2_Helper
             var presets = new List<PresetSummary>();
 
             using var doc = JsonDocument.Parse(LoadPresetsJson());
-            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            JsonElement presetElements = GetStratagemPresetsElement(doc.RootElement);
+            if (presetElements.ValueKind != JsonValueKind.Array)
                 return presets;
 
-            foreach (var presetElement in doc.RootElement.EnumerateArray())
+            foreach (var presetElement in presetElements.EnumerateArray())
             {
                 string id = presetElement.TryGetProperty("id", out var idElement) ? idElement.GetString() ?? "" : "";
                 string name = presetElement.TryGetProperty("name", out var nameElement) ? nameElement.GetString() ?? "" : "";
@@ -3523,6 +3581,36 @@ namespace HD2_Helper
                 presets.Add(new PresetSummary(id, name.Trim(), loadout, supportWeapon, BuildPresetPreviewImages(loadout)));
             }
 
+            return presets;
+        }
+
+        private List<EquipmentPresetSummary> LoadEquipmentPresetSummaries()
+        {
+            var presets = new List<EquipmentPresetSummary>();
+            using var doc = JsonDocument.Parse(LoadPresetsJson());
+            JsonElement presetElements = GetEquipmentPresetsElement(doc.RootElement);
+
+            // 구 버전 통합 저장본은 장비 프리셋을 화면에서 바로 사용할 수 있게 임시 ID로 분리한다.
+            bool legacy = doc.RootElement.ValueKind == JsonValueKind.Array;
+            if (legacy) presetElements = doc.RootElement;
+            if (presetElements.ValueKind != JsonValueKind.Array) return presets;
+
+            int index = 0;
+            foreach (var presetElement in presetElements.EnumerateArray())
+            {
+                string sourceId = presetElement.TryGetProperty("id", out var idElement) ? idElement.GetString() ?? "" : "";
+                string id = legacy ? $"equipment-{sourceId}" : sourceId;
+                string name = presetElement.TryGetProperty("name", out var nameElement) ? nameElement.GetString() ?? "" : "";
+                if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(name))
+                {
+                    index++;
+                    continue;
+                }
+
+                var loadout = PresetLoadout.FromJson(presetElement.TryGetProperty("loadout", out var loadoutElement) ? loadoutElement : default);
+                presets.Add(new EquipmentPresetSummary(id, name.Trim(), loadout, BuildEquipmentPresetPreviewImages(loadout)));
+                index++;
+            }
             return presets;
         }
 
@@ -3640,19 +3728,23 @@ namespace HD2_Helper
 
         private Image?[] BuildPresetPreviewImages(PresetLoadout loadout)
         {
+            var names = loadout.Stratagems.Take(8).Select(name => ("스트라타젬", name)).ToArray();
+
+            return names
+                .Select(item => GetLoadoutPreviewImage(item.Item1, item.Item2))
+                .ToArray();
+        }
+
+        private Image?[] BuildEquipmentPresetPreviewImages(PresetLoadout loadout)
+        {
             var names = new[]
             {
                 ("방어구", loadout.Armor),
                 ("주 무기", loadout.Primary),
                 ("보조 무기", loadout.Secondary),
                 ("투척 무기", loadout.Grenade)
-            }
-            .Concat(loadout.Stratagems.Take(4).Select(name => ("스트라타젬", name)))
-            .ToArray();
-
-            return names
-                .Select(item => GetLoadoutPreviewImage(item.Item1, item.Item2))
-                .ToArray();
+            };
+            return names.Select(item => GetLoadoutPreviewImage(item.Item1, item.Item2)).ToArray();
         }
 
         private Image? GetLoadoutPreviewImage(string type, string? name)
@@ -3702,7 +3794,7 @@ namespace HD2_Helper
             }));
         }
 
-        private void ApplyPresetFromOverlay(PresetSummary preset)
+        private void ApplyStratagemPresetFromOverlay(PresetSummary preset)
         {
             _selectedPresetId = preset.Id;
             // 프리셋 오버레이로 바꿀 때도 게임 안에는 직전 슬롯이 남아 있으므로 OCR 실패 시 보조 시작점으로 보관한다.
@@ -3712,6 +3804,18 @@ namespace HD2_Helper
                 .Take(10)
                 .Select(name => string.IsNullOrWhiteSpace(name) ? null : name)
                 .ToArray();
+            ApplyPresetSupportWeaponSettings(preset.SupportWeapon);
+
+            SaveSetting();
+            SendPresetSelectionToWeb(preset.Id);
+            _presetOverlayRequestedVisible = false;
+            _presetOverlayForm?.Hide();
+            RestoreGameFocus();
+        }
+
+        private void ApplyEquipmentPresetFromOverlay(EquipmentPresetSummary preset)
+        {
+            _selectedEquipmentPresetId = preset.Id;
             _currentLoadoutSlots = new[]
             {
                 EmptyToNull(preset.Loadout.Armor),
@@ -3719,10 +3823,8 @@ namespace HD2_Helper
                 EmptyToNull(preset.Loadout.Secondary),
                 EmptyToNull(preset.Loadout.Grenade)
             };
-            ApplyPresetSupportWeaponSettings(preset.SupportWeapon);
-
             SaveSetting();
-            SendPresetSelectionToWeb(preset.Id);
+            SendEquipmentPresetSelectionToWeb(preset.Id);
             _presetOverlayRequestedVisible = false;
             _presetOverlayForm?.Hide();
             RestoreGameFocus();
@@ -3775,6 +3877,17 @@ namespace HD2_Helper
             };
 
             // 작은 전환창에서 고른 프리셋도 원본/편집창 UI의 선택 탭에 동시에 반영한다.
+            PostWebMessageToViews(payload);
+        }
+
+        private void SendEquipmentPresetSelectionToWeb(string id)
+        {
+            var payload = new
+            {
+                type = "SELECT_EQUIPMENT_PRESET_FROM_APP",
+                id
+            };
+
             PostWebMessageToViews(payload);
         }
 
@@ -6247,6 +6360,7 @@ namespace HD2_Helper
         }
 
         public record PresetSummary(string Id, string Name, PresetLoadout Loadout, SupportWeaponAssistSettings SupportWeapon, Image?[] PreviewImages);
+        public record EquipmentPresetSummary(string Id, string Name, PresetLoadout Loadout, Image?[] PreviewImages);
 
         public class PresetLoadout
         {
@@ -6732,21 +6846,29 @@ namespace HD2_Helper
         {
             protected override bool ShowWithoutActivation => true;
 
-            private readonly Action<PresetSummary> onPresetSelected;
+            private readonly Action<PresetSummary> onStratagemPresetSelected;
+            private readonly Action<EquipmentPresetSummary> onEquipmentPresetSelected;
             private readonly Action? onClosed;
-            private readonly FlowLayoutPanel list = new();
-            private List<PresetSummary> presets = new();
-            private string selectedPresetId = "";
+            private readonly FlowLayoutPanel stratagemList = new();
+            private readonly FlowLayoutPanel equipmentList = new();
+            private List<PresetSummary> stratagemPresets = new();
+            private List<EquipmentPresetSummary> equipmentPresets = new();
+            private string selectedStratagemPresetId = "";
+            private string selectedEquipmentPresetId = "";
 
-            public PresetOverlayForm(Action<PresetSummary> onSelected, Action? onClosed)
+            public PresetOverlayForm(
+                Action<PresetSummary> onStratagemSelected,
+                Action<EquipmentPresetSummary> onEquipmentSelected,
+                Action? onClosed)
             {
-                onPresetSelected = onSelected;
+                onStratagemPresetSelected = onStratagemSelected;
+                onEquipmentPresetSelected = onEquipmentSelected;
                 this.onClosed = onClosed;
                 Text = "프리셋 전환";
                 FormBorderStyle = FormBorderStyle.None;
                 StartPosition = FormStartPosition.CenterScreen;
-                Size = new Size(780, 420);
-                MinimumSize = new Size(560, 300);
+                Size = new Size(800, 560);
+                MinimumSize = new Size(600, 380);
                 BackColor = Color.FromArgb(18, 18, 18);
                 ForeColor = Color.White;
                 TopMost = true;
@@ -6768,10 +6890,16 @@ namespace HD2_Helper
                 }
             }
 
-            public void UpdatePresets(List<PresetSummary> nextPresets, string selectedId)
+            public void UpdatePresets(
+                List<PresetSummary> nextStratagemPresets,
+                List<EquipmentPresetSummary> nextEquipmentPresets,
+                string selectedStratagemId,
+                string selectedEquipmentId)
             {
-                presets = nextPresets;
-                selectedPresetId = selectedId;
+                stratagemPresets = nextStratagemPresets;
+                equipmentPresets = nextEquipmentPresets;
+                selectedStratagemPresetId = selectedStratagemId;
+                selectedEquipmentPresetId = selectedEquipmentId;
                 RenderPresetCards();
             }
 
@@ -6781,11 +6909,14 @@ namespace HD2_Helper
                 {
                     Dock = DockStyle.Fill,
                     Padding = new Padding(14),
-                    RowCount = 2,
+                    RowCount = 5,
                     BackColor = BackColor
                 };
                 root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-                root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+                root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                root.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
+                root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                root.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
                 Controls.Add(root);
 
                 var title = new Label
@@ -6798,45 +6929,65 @@ namespace HD2_Helper
                 };
                 root.Controls.Add(title, 0, 0);
 
+                root.Controls.Add(CreateSectionTitle("스트라타젬 프리셋"), 0, 1);
+                ConfigureList(stratagemList);
+                root.Controls.Add(stratagemList, 0, 2);
+                root.Controls.Add(CreateSectionTitle("장비 프리셋"), 0, 3);
+                ConfigureList(equipmentList);
+                root.Controls.Add(equipmentList, 0, 4);
+            }
+
+            private static Label CreateSectionTitle(string text) => new()
+            {
+                Text = text,
+                Font = new Font("맑은 고딕", 10, FontStyle.Bold),
+                ForeColor = Color.Gainsboro,
+                AutoSize = true,
+                Margin = new Padding(0, 0, 0, 5)
+            };
+
+            private void ConfigureList(FlowLayoutPanel list)
+            {
                 list.Dock = DockStyle.Fill;
                 list.AutoScroll = true;
                 list.WrapContents = true;
                 list.BackColor = BackColor;
-                root.Controls.Add(list, 0, 1);
+                list.Padding = new Padding(0, 0, 0, 6);
             }
 
             private void RenderPresetCards()
             {
-                list.SuspendLayout();
-                list.Controls.Clear();
-
-                foreach (var preset in presets)
-                {
-                    list.Controls.Add(CreatePresetCard(preset));
-                }
-
-                list.ResumeLayout();
+                stratagemList.SuspendLayout();
+                equipmentList.SuspendLayout();
+                stratagemList.Controls.Clear();
+                equipmentList.Controls.Clear();
+                foreach (var preset in stratagemPresets)
+                    stratagemList.Controls.Add(CreatePresetCard(preset.Name, preset.PreviewImages, preset.Id == selectedStratagemPresetId, () => onStratagemPresetSelected(preset)));
+                foreach (var preset in equipmentPresets)
+                    equipmentList.Controls.Add(CreatePresetCard(preset.Name, preset.PreviewImages, preset.Id == selectedEquipmentPresetId, () => onEquipmentPresetSelected(preset)));
+                stratagemList.ResumeLayout();
+                equipmentList.ResumeLayout();
             }
 
-            private Control CreatePresetCard(PresetSummary preset)
+            private Control CreatePresetCard(string presetName, Image?[] previewImages, bool selected, Action onSelected)
             {
                 var card = new Panel
                 {
                     Width = 220,
-                    Height = 112,
+                    Height = 116,
                     Margin = new Padding(0, 0, 10, 10),
-                    BackColor = preset.Id == selectedPresetId ? Color.FromArgb(58, 55, 18) : Color.FromArgb(30, 30, 30),
+                    BackColor = selected ? Color.FromArgb(58, 55, 18) : Color.FromArgb(30, 30, 30),
                     Cursor = Cursors.Hand
                 };
                 card.Paint += (_, e) =>
                 {
-                    using var pen = new Pen(preset.Id == selectedPresetId ? Color.FromArgb(255, 225, 20) : Color.FromArgb(70, 70, 70), 2);
+                    using var pen = new Pen(selected ? Color.FromArgb(255, 225, 20) : Color.FromArgb(70, 70, 70), 2);
                     e.Graphics.DrawRectangle(pen, 1, 1, card.Width - 3, card.Height - 3);
                 };
 
                 var name = new Label
                 {
-                    Text = preset.Name,
+                    Text = presetName,
                     ForeColor = Color.White,
                     Font = new Font("맑은 고딕", 10, FontStyle.Bold),
                     AutoEllipsis = true,
@@ -6845,20 +6996,20 @@ namespace HD2_Helper
                 };
                 card.Controls.Add(name);
 
-                for (int i = 0; i < preset.PreviewImages.Length; i++)
+                for (int i = 0; i < previewImages.Length; i++)
                 {
                     var picture = new PictureBox
                     {
                         Size = new Size(42, 42),
-                        Location = new Point(10 + (i % 4) * 50, 36 + (i / 4) * 38),
+                        Location = new Point(10 + (i % 4) * 50, 36 + (i / 4) * 30),
                         SizeMode = PictureBoxSizeMode.Zoom,
                         BackColor = Color.FromArgb(14, 14, 14),
-                        Image = preset.PreviewImages[i]
+                        Image = previewImages[i]
                     };
                     card.Controls.Add(picture);
                 }
 
-                void SelectPreset(object? _, EventArgs __) => onPresetSelected(preset);
+                void SelectPreset(object? _, EventArgs __) => onSelected();
                 card.Click += SelectPreset;
                 foreach (Control child in card.Controls)
                     child.Click += SelectPreset;

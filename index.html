@@ -31,10 +31,10 @@
             --modal-height: calc(var(--stage-height) * var(--modal-height-scale));
             --modal-scale: 1;
             --stage-width: 950px;
-            --stage-height: 590px;
+            --stage-height: 630px;
             --stage-padding: 20px;
             --design-width: 910px;
-            --design-height: 550px;
+            --design-height: 590px;
             --design-gap: 10px;
             --main-panel-gap: 20px;
             --preset-tabs-gap: 20px;
@@ -115,10 +115,24 @@
 
         .left-workspace {
             display: grid;
-            grid-template-rows: var(--slots-height) var(--loadout-height);
+            grid-template-rows: var(--slots-height) auto var(--loadout-height);
             gap: var(--design-gap);
             height: 100%;
             min-height: 0;
+        }
+
+        .equipment-preset-section {
+            min-width: 0;
+            position: relative;
+        }
+
+        .equipment-preset-section .preset-tabs-bar {
+            min-height: 26px;
+            grid-column: auto;
+        }
+
+        .equipment-preset-section .preset-tabs-selected-rule {
+            top: calc(var(--preset-tab-font) + 1px);
         }
 
         .preset-tabs-bar {
@@ -1356,6 +1370,11 @@
         <div class="left-workspace">
             <div class="stratagem-slots-container" id="slots-container"></div>
 
+            <div class="equipment-preset-section">
+                <div class="preset-tabs-bar" id="equipment-preset-tabs-bar"></div>
+                <div class="preset-tabs-selected-rule" id="equipment-preset-tabs-selected-rule"></div>
+            </div>
+
             <div class="my-loadout-panel">
                 <div class="loadout-box box-armor" onclick="openModal('방어구')" oncontextmenu="clearLoadoutBox(event, 'selected-armor')" tabindex="-1">
                     <h4>방어구</h4>
@@ -1732,11 +1751,17 @@
         let draggedSlot = null;
         const excludedItems = new Set();
         let presets = [];
+        let equipmentPresets = [];
         let presetsLoaded = false;
+        let equipmentPresetsLoaded = false;
         let selectedPresetId = '';
+        let selectedEquipmentPresetId = '';
         let pendingSelectedPresetId = '';
+        let pendingSelectedEquipmentPresetId = '';
         let editingPresetId = '';
+        let editingEquipmentPresetId = '';
         let draggedPresetId = '';
+        let draggedEquipmentPresetId = '';
         let presetDragShields = [];
         let presetDragShieldTimer = 0;
         let presetDragAutoScrollFrame = 0;
@@ -2392,6 +2417,9 @@
         function renderSettings(data) {
             currentWaitingKeyTarget = data.waitingTarget || null;
             pendingSelectedPresetId = typeof data.selectedPresetId === 'string' ? data.selectedPresetId : pendingSelectedPresetId;
+            pendingSelectedEquipmentPresetId = typeof data.selectedEquipmentPresetId === 'string'
+                ? data.selectedEquipmentPresetId
+                : pendingSelectedEquipmentPresetId;
 
             currentInputDelay = data.inputDelay ?? 30;
             updateInputDelayLabel(currentInputDelay);
@@ -2517,13 +2545,19 @@
                     });
 
                     if (currentTargetSlot) refreshCurrentModal();
-                } else if (data.type === 'PRESETS_LOADED' && Array.isArray(data.presets)) {
-                    presets = normalizePresets(data.presets);
+                } else if (data.type === 'PRESETS_LOADED' && data.presets) {
+                    const collections = normalizePresetCollections(data.presets);
+                    presets = collections.stratagemPresets;
+                    equipmentPresets = collections.equipmentPresets;
                     presetsLoaded = true;
+                    equipmentPresetsLoaded = true;
                     applyPendingSelectedPreset();
                     renderPresetTabs();
+                    renderEquipmentPresetTabs();
                 } else if (data.type === 'SELECT_PRESET_FROM_APP' && typeof data.id === 'string') {
                     selectPresetFromApp(data.id);
+                } else if (data.type === 'SELECT_EQUIPMENT_PRESET_FROM_APP' && typeof data.id === 'string') {
+                    selectEquipmentPresetFromApp(data.id);
                 } else if (data.type === 'SETTINGS_LOADED') {
                     renderSettings(data);
                 }
@@ -3207,7 +3241,7 @@
             );
         }
 
-        function normalizePresets(source) {
+        function normalizePresetList(source, kind) {
             if (!Array.isArray(source)) return [];
 
             return source
@@ -3215,21 +3249,60 @@
                 .map((preset, index) => ({
                     id: typeof preset.id === 'string' && preset.id ? preset.id : `preset-${Date.now()}-${index}`,
                     name: typeof preset.name === 'string' && preset.name.trim() ? preset.name.trim() : `프리셋 ${index + 1}`,
-                    loadout: normalizePresetLoadout(preset.loadout),
-                    supportWeapon: normalizePresetSupportWeaponSettings(preset.supportWeapon)
+                    loadout: kind === 'stratagem'
+                        ? normalizeStratagemLoadout(preset.loadout)
+                        : normalizeEquipmentLoadout(preset.loadout),
+                    ...(kind === 'stratagem'
+                        ? { supportWeapon: normalizePresetSupportWeaponSettings(preset.supportWeapon) }
+                        : {})
                 }));
         }
 
-        function normalizePresetLoadout(loadout = {}) {
+        function normalizePresetCollections(source) {
+            if (Array.isArray(source)) {
+                // 이전 통합 프리셋은 같은 이름을 가진 두 종류의 프리셋으로 자동 분리한다.
+                return {
+                    stratagemPresets: normalizePresetList(source, 'stratagem'),
+                    equipmentPresets: source.filter(Boolean).map((preset, index) => ({
+                        id: `equipment-${typeof preset.id === 'string' && preset.id ? preset.id : index + 1}`,
+                        name: typeof preset.name === 'string' && preset.name.trim() ? preset.name.trim() : `장비 프리셋 ${index + 1}`,
+                        loadout: normalizeEquipmentLoadout(preset.loadout)
+                    }))
+                };
+            }
+
+            if (!source || typeof source !== 'object') {
+                return { stratagemPresets: [], equipmentPresets: [] };
+            }
+
+            return {
+                stratagemPresets: normalizePresetList(source.stratagemPresets, 'stratagem'),
+                equipmentPresets: normalizePresetList(source.equipmentPresets, 'equipment')
+            };
+        }
+
+        function normalizeStratagemLoadout(loadout = {}) {
             return {
                 stratagems: Array.from({ length: 10 }, (_, index) => {
                     const value = Array.isArray(loadout.stratagems) ? loadout.stratagems[index] : '';
                     return typeof value === 'string' ? value : '';
-                }),
+                })
+            };
+        }
+
+        function normalizeEquipmentLoadout(loadout = {}) {
+            return {
                 armor: typeof loadout.armor === 'string' ? loadout.armor : '',
                 primary: typeof loadout.primary === 'string' ? loadout.primary : '',
                 secondary: typeof loadout.secondary === 'string' ? loadout.secondary : '',
                 grenade: typeof loadout.grenade === 'string' ? loadout.grenade : ''
+            };
+        }
+
+        function normalizePresetLoadout(loadout = {}) {
+            return {
+                ...normalizeStratagemLoadout(loadout),
+                ...normalizeEquipmentLoadout(loadout)
             };
         }
 
@@ -3282,6 +3355,32 @@
             syncCurrentLoadoutToApp();
         }
 
+        async function applyStratagemPresetLoadout(loadout) {
+            const renderToken = ++loadoutRenderToken;
+            const presetLoadout = normalizeStratagemLoadout(loadout);
+            const imageUrls = presetLoadout.stratagems.map(name => name ? getItemImageUrl('스트라타젬', name) : '');
+            if (renderToken !== loadoutRenderToken) return;
+
+            presetLoadout.stratagems.forEach((name, index) => {
+                renderStratagemSlot(document.getElementById(`slot-${index + 1}`), index + 1, name, imageUrls[index] || '');
+            });
+            syncCurrentLoadoutToApp();
+        }
+
+        async function applyEquipmentPresetLoadout(loadout) {
+            const renderToken = ++loadoutRenderToken;
+            const presetLoadout = normalizeEquipmentLoadout(loadout);
+            const values = [
+                ['방어구', presetLoadout.armor], ['주 무기', presetLoadout.primary],
+                ['보조 무기', presetLoadout.secondary], ['투척 무기', presetLoadout.grenade]
+            ];
+            const imageUrls = values.map(([type, name]) => name ? getCachedDisplayImageUrl(type, name) : '');
+            if (renderToken !== loadoutRenderToken) return;
+
+            values.forEach(([type, name], index) => renderLoadoutBox(type, name, imageUrls[index] || ''));
+            syncCurrentLoadoutToApp();
+        }
+
         function applyPresetSupportWeaponSettings(supportWeapon) {
             currentSupportWeaponSettings = mergeGlobalWarningWithPresetSupport(currentSupportWeaponSettings || {}, supportWeapon || {});
             renderSupportWeaponSettings(currentSupportWeaponSettings);
@@ -3295,6 +3394,14 @@
             e.currentTarget.scrollLeft += e.deltaY;
         }, { passive: false });
         document.getElementById('preset-tabs-bar')?.addEventListener('scroll', updatePresetSelectedRule);
+        document.getElementById('equipment-preset-tabs-bar')?.addEventListener('wheel', (e) => {
+            if (e.deltaY === 0) return;
+            e.preventDefault();
+            e.currentTarget.scrollLeft += e.deltaY;
+        }, { passive: false });
+        document.getElementById('equipment-preset-tabs-bar')?.addEventListener('scroll', updateEquipmentPresetSelectedRule);
+        document.getElementById('equipment-preset-tabs-bar')?.addEventListener('dragover', handleEquipmentPresetDragOver);
+        document.getElementById('equipment-preset-tabs-bar')?.addEventListener('drop', handleEquipmentPresetDrop);
 
         function renderPresetTabs() {
             const container = document.getElementById('preset-tabs-bar');
@@ -3381,29 +3488,97 @@
             });
         }
 
+        function renderEquipmentPresetTabs() {
+            const container = document.getElementById('equipment-preset-tabs-bar');
+            if (!container) return;
+
+            container.innerHTML = '';
+            container.setAttribute('role', 'tablist');
+            updatePrimaryLoadoutAction();
+
+            equipmentPresets.forEach(preset => {
+                const tab = document.createElement('span');
+                tab.className = `preset-tab${preset.id === selectedEquipmentPresetId ? ' selected' : ''}`;
+                tab.innerHTML = editingEquipmentPresetId === preset.id
+                    ? `<span class="preset-rename-inline equipment-preset-rename-inline" contenteditable="true" spellcheck="false" tabindex="-1">${escapeHtml(preset.name)}</span>`
+                    : `<span>${escapeHtml(preset.name)}</span>`;
+                tab.setAttribute('tabindex', '-1');
+                tab.setAttribute('role', 'tab');
+                tab.setAttribute('aria-selected', preset.id === selectedEquipmentPresetId ? 'true' : 'false');
+                tab.setAttribute('draggable', editingEquipmentPresetId === preset.id ? 'false' : 'true');
+                tab.dataset.presetId = preset.id;
+                tab.addEventListener('click', (e) => handleEquipmentPresetTabClick(e, preset.id));
+                tab.addEventListener('dragstart', handleEquipmentPresetDragStart);
+                tab.addEventListener('dragend', handleEquipmentPresetDragEnd);
+                tab.addEventListener('dblclick', (e) => {
+                    e.preventDefault(); e.stopPropagation(); startEquipmentPresetInlineRename(preset.id);
+                });
+                tab.addEventListener('contextmenu', (e) => {
+                    e.preventDefault(); e.stopPropagation(); handleEquipmentPresetContextMenu(e, preset.id);
+                });
+                container.appendChild(tab);
+            });
+
+            const addTab = document.createElement('span');
+            addTab.className = 'preset-tab add';
+            addTab.textContent = '＋';
+            addTab.setAttribute('tabindex', '-1');
+            addTab.setAttribute('role', 'button');
+            addTab.setAttribute('aria-label', '장비 프리셋 추가');
+            addTab.addEventListener('click', () => addEquipmentPreset());
+            container.appendChild(addTab);
+
+            const editingInput = container.querySelector('.equipment-preset-rename-inline');
+            if (editingInput) {
+                editingInput.addEventListener('click', (e) => e.stopPropagation());
+                editingInput.addEventListener('keydown', handleEquipmentPresetInlineRenameKey);
+                editingInput.addEventListener('blur', confirmEquipmentPresetInlineRename);
+                setTimeout(() => { editingInput.focus(); selectEditableText(editingInput); }, 0);
+            }
+            updateEquipmentPresetSelectedRule();
+        }
+
+        function updateEquipmentPresetSelectedRule() {
+            requestAnimationFrame(() => {
+                const container = document.getElementById('equipment-preset-tabs-bar');
+                const indicator = document.getElementById('equipment-preset-tabs-selected-rule');
+                const selectedTab = container?.querySelector('.preset-tab.selected');
+                if (!container || !indicator || !selectedTab) {
+                    indicator?.style.setProperty('display', 'none');
+                    return;
+                }
+                const left = Math.max(0, selectedTab.offsetLeft - container.scrollLeft);
+                const width = Math.max(0, Math.min(container.clientWidth, left + selectedTab.offsetWidth) - left);
+                indicator.style.left = `${left}px`;
+                indicator.style.width = `${width}px`;
+                indicator.style.display = width > 0 ? 'block' : 'none';
+            });
+        }
+
         function updatePrimaryLoadoutAction() {
             const button = document.getElementById('loadout-action-primary');
             if (!button) return;
             button.classList.remove('saved-feedback');
-            button.textContent = selectedPresetId ? '프리셋 저장' : '무작위 선택';
+            button.textContent = (selectedPresetId || selectedEquipmentPresetId) ? '프리셋 저장' : '무작위 선택';
         }
 
         function showPresetSaveFeedback(id) {
             const button = document.getElementById('loadout-action-primary');
-            if (!button || selectedPresetId !== id) return;
+            if (!button || (selectedPresetId !== id && selectedEquipmentPresetId !== id)) return;
 
             clearTimeout(presetSaveFeedbackTimer);
             button.textContent = '✓ 저장 완료';
             button.classList.add('saved-feedback');
 
             presetSaveFeedbackTimer = setTimeout(() => {
-                if (selectedPresetId === id) updatePrimaryLoadoutAction();
+                if (selectedPresetId === id || selectedEquipmentPresetId === id) updatePrimaryLoadoutAction();
             }, 1000);
         }
 
         function handlePrimaryLoadoutAction() {
-            if (selectedPresetId) {
-                saveSelectedPreset();
+            if (selectedPresetId || selectedEquipmentPresetId) {
+                if (selectedPresetId) saveSelectedPreset();
+                if (selectedEquipmentPresetId) saveSelectedEquipmentPreset();
             } else {
                 generateRandomLoadout();
             }
@@ -3427,7 +3602,10 @@
         }
 
         function savePresets() {
-            postAppMessage({ type: 'SAVE_PRESETS', presets });
+            postAppMessage({
+                type: 'SAVE_PRESETS',
+                presets: { stratagemPresets: presets, equipmentPresets }
+            });
         }
 
         function saveSelectedPresetId(id = selectedPresetId) {
@@ -3435,11 +3613,27 @@
             postAppMessage({ type: 'SET_SELECTED_PRESET', id: id || '' });
         }
 
+        function saveSelectedEquipmentPresetId(id = selectedEquipmentPresetId) {
+            postAppMessage({ type: 'SET_SELECTED_EQUIPMENT_PRESET', id: id || '' });
+        }
+
         function applyPendingSelectedPreset() {
             // 설정, 프리셋 목록, 장비 투명 이미지 캐시는 비동기로 도착하므로 모두 준비된 뒤 복원한다.
-            if (!pendingSelectedPresetId || !presetsLoaded || !imageCacheReady) return;
+            if (!presetsLoaded || !equipmentPresetsLoaded || !imageCacheReady) return;
 
-            const preset = presets.find(item => item.id === pendingSelectedPresetId);
+            const preset = pendingSelectedPresetId ? presets.find(item => item.id === pendingSelectedPresetId) : null;
+            if (!pendingSelectedPresetId) {
+                const equipmentPreset = equipmentPresets.find(item => item.id === pendingSelectedEquipmentPresetId);
+                if (!equipmentPreset) {
+                    if (pendingSelectedEquipmentPresetId) saveSelectedEquipmentPresetId('');
+                } else if (selectedEquipmentPresetId !== equipmentPreset.id) {
+                    selectedEquipmentPresetId = equipmentPreset.id;
+                    applyEquipmentPresetLoadout(equipmentPreset.loadout);
+                }
+                pendingSelectedEquipmentPresetId = '';
+                renderEquipmentPresetTabs();
+                return;
+            }
             if (!preset) {
                 // 저장된 id가 삭제된 프리셋이면 다음 실행에서 다시 찾지 않도록 정리한다.
                 saveSelectedPresetId('');
@@ -3449,14 +3643,29 @@
 
             if (selectedPresetId === preset.id) {
                 pendingSelectedPresetId = '';
+                applyPendingEquipmentPreset();
                 return;
             }
 
             selectedPresetId = preset.id;
             pendingSelectedPresetId = '';
-            applyPresetLoadout(preset.loadout);
+            applyStratagemPresetLoadout(preset.loadout);
             applyPresetSupportWeaponSettings(preset.supportWeapon);
             renderPresetTabs();
+            applyPendingEquipmentPreset();
+        }
+
+        function applyPendingEquipmentPreset() {
+            if (!equipmentPresetsLoaded || !imageCacheReady) return;
+            const equipmentPreset = equipmentPresets.find(item => item.id === pendingSelectedEquipmentPresetId);
+            if (!equipmentPreset) {
+                if (pendingSelectedEquipmentPresetId) saveSelectedEquipmentPresetId('');
+            } else if (selectedEquipmentPresetId !== equipmentPreset.id) {
+                selectedEquipmentPresetId = equipmentPreset.id;
+                applyEquipmentPresetLoadout(equipmentPreset.loadout);
+            }
+            pendingSelectedEquipmentPresetId = '';
+            renderEquipmentPresetTabs();
         }
 
         function handlePresetDragStart(e) {
@@ -3754,7 +3963,7 @@
             const preset = {
                 id: `preset-${Date.now()}`,
                 name: getNextPresetName(),
-                loadout: normalizePresetLoadout(),
+                loadout: normalizeStratagemLoadout(),
                 supportWeapon: getCurrentPresetSupportWeapon()
             };
 
@@ -3764,7 +3973,7 @@
             const safeInsertIndex = insertIndex > 0 ? insertIndex : presets.length;
             presets.splice(safeInsertIndex, 0, preset);
             selectedPresetId = preset.id;
-            applyPresetLoadout(preset.loadout);
+            applyStratagemPresetLoadout(preset.loadout);
             applyPresetSupportWeaponSettings(preset.supportWeapon);
             renderPresetTabs();
 
@@ -3838,13 +4047,13 @@
             const duplicatedPreset = {
                 id: `preset-${Date.now()}`,
                 name: getDuplicatePresetName(preset.name),
-                loadout: normalizePresetLoadout(preset.loadout),
+                loadout: normalizeStratagemLoadout(preset.loadout),
                 supportWeapon: normalizePresetSupportWeaponSettings(preset.supportWeapon)
             };
 
             presets.splice(sourceIndex + 1, 0, duplicatedPreset);
             selectedPresetId = duplicatedPreset.id;
-            applyPresetLoadout(duplicatedPreset.loadout);
+            applyStratagemPresetLoadout(duplicatedPreset.loadout);
             applyPresetSupportWeaponSettings(duplicatedPreset.supportWeapon);
             renderPresetTabs();
 
@@ -3882,7 +4091,7 @@
             }
 
             selectedPresetId = id;
-            applyPresetLoadout(preset.loadout);
+            applyStratagemPresetLoadout(preset.loadout);
             applyPresetSupportWeaponSettings(preset.supportWeapon);
             renderPresetTabs();
             saveSelectedPresetId();
@@ -3921,7 +4130,7 @@
 
             // 앱에서 다시 전달된 선택 동기화는 이미 C# 쪽 저장을 거친 상태라 재저장 메시지를 보내지 않는다.
             selectedPresetId = id;
-            applyPresetLoadout(preset.loadout);
+            applyStratagemPresetLoadout(preset.loadout);
             applyPresetSupportWeaponSettings(preset.supportWeapon);
             renderPresetTabs();
         }
@@ -4004,7 +4213,7 @@
             const preset = presets.find(item => item.id === id);
             if (!preset) return;
 
-            preset.loadout = getCurrentLoadout();
+            preset.loadout = normalizeStratagemLoadout(getCurrentLoadout());
             preset.supportWeapon = getCurrentPresetSupportWeapon();
             selectedPresetId = id;
             renderPresetTabs();
@@ -4015,10 +4224,188 @@
 
         window.hd2SaveCurrentPresetFromHook = function () {
             // F3 비활성 편집창의 Ctrl+S는 C# 후킹에서 이 전역 함수를 직접 호출한다.
-            if (!selectedPresetId) return false;
-            saveSelectedPreset(selectedPresetId);
-            return true;
+            let saved = false;
+            if (selectedPresetId) {
+                saveSelectedPreset(selectedPresetId);
+                saved = true;
+            }
+            if (selectedEquipmentPresetId) {
+                saveSelectedEquipmentPreset(selectedEquipmentPresetId);
+                saved = true;
+            }
+            return saved;
         };
+
+        function handleEquipmentPresetDragStart(e) {
+            draggedEquipmentPresetId = this.dataset.presetId || '';
+            if (!draggedEquipmentPresetId) return;
+
+            this.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', draggedEquipmentPresetId);
+        }
+
+        function handleEquipmentPresetDragEnd() {
+            draggedEquipmentPresetId = '';
+            document.querySelectorAll('#equipment-preset-tabs-bar .preset-tab.dragging')
+                .forEach(tab => tab.classList.remove('dragging'));
+        }
+
+        function handleEquipmentPresetDragOver(e) {
+            if (!draggedEquipmentPresetId) return;
+            e.preventDefault();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        }
+
+        function handleEquipmentPresetDrop(e) {
+            if (!draggedEquipmentPresetId) return;
+            e.preventDefault();
+
+            const container = e.currentTarget;
+            const fromIndex = equipmentPresets.findIndex(preset => preset.id === draggedEquipmentPresetId);
+            if (fromIndex < 0) return;
+
+            const tabs = [...container.querySelectorAll('.preset-tab[data-preset-id]')];
+            let insertIndex = tabs.length;
+            for (let index = 0; index < tabs.length; index++) {
+                const rect = tabs[index].getBoundingClientRect();
+                if (e.clientX < rect.left + rect.width / 2) {
+                    insertIndex = index;
+                    break;
+                }
+            }
+
+            let targetIndex = insertIndex;
+            if (fromIndex < targetIndex) targetIndex--;
+            if (targetIndex !== fromIndex) {
+                const [preset] = equipmentPresets.splice(fromIndex, 1);
+                equipmentPresets.splice(targetIndex, 0, preset);
+                savePresets();
+            }
+
+            handleEquipmentPresetDragEnd();
+            renderEquipmentPresetTabs();
+        }
+
+        function getNextEquipmentPresetName() {
+            let index = 1;
+            const names = new Set(equipmentPresets.map(preset => preset.name));
+            while (names.has(`장비 프리셋 ${index}`)) index++;
+            return `장비 프리셋 ${index}`;
+        }
+
+        function addEquipmentPreset(insertAfterId = '') {
+            const preset = {
+                id: `equipment-${Date.now()}`,
+                name: getNextEquipmentPresetName(),
+                loadout: normalizeEquipmentLoadout()
+            };
+            const index = insertAfterId ? equipmentPresets.findIndex(item => item.id === insertAfterId) + 1 : equipmentPresets.length;
+            equipmentPresets.splice(index > 0 ? index : equipmentPresets.length, 0, preset);
+            selectedEquipmentPresetId = preset.id;
+            applyEquipmentPresetLoadout(preset.loadout);
+            savePresets();
+            saveSelectedEquipmentPresetId();
+            renderEquipmentPresetTabs();
+        }
+
+        function handleEquipmentPresetTabClick(e, id) {
+            const modifierState = window.hd2ModifierState || {};
+            if (e?.shiftKey || modifierState.shift === true) {
+                e.preventDefault(); e.stopPropagation(); addEquipmentPreset(id); return;
+            }
+            if (e?.ctrlKey || modifierState.ctrl === true) {
+                e.preventDefault(); e.stopPropagation(); requestDeleteEquipmentPreset(id); return;
+            }
+            selectEquipmentPreset(id, true);
+        }
+
+        function handleEquipmentPresetContextMenu(e, id) {
+            const modifierState = window.hd2ModifierState || {};
+            if (e?.shiftKey || modifierState.shift === true) {
+                const source = equipmentPresets.find(item => item.id === id);
+                if (!source) return;
+                const copy = {
+                    id: `equipment-${Date.now()}`,
+                    name: `${source.name} 복사본`,
+                    loadout: normalizeEquipmentLoadout(source.loadout)
+                };
+                equipmentPresets.splice(equipmentPresets.findIndex(item => item.id === id) + 1, 0, copy);
+                selectedEquipmentPresetId = copy.id;
+                applyEquipmentPresetLoadout(copy.loadout);
+                savePresets(); saveSelectedEquipmentPresetId(); renderEquipmentPresetTabs();
+            } else if (e?.ctrlKey || modifierState.ctrl === true) {
+                requestDeleteEquipmentPreset(id);
+            }
+        }
+
+        function selectEquipmentPreset(id, saveSelection) {
+            const preset = equipmentPresets.find(item => item.id === id);
+            if (!preset || selectedEquipmentPresetId === id) return;
+            selectedEquipmentPresetId = id;
+            applyEquipmentPresetLoadout(preset.loadout);
+            renderEquipmentPresetTabs();
+            if (saveSelection) saveSelectedEquipmentPresetId();
+        }
+
+        function selectEquipmentPresetFromApp(id) {
+            selectEquipmentPreset(id, false);
+        }
+
+        function requestDeleteEquipmentPreset(id) {
+            const preset = equipmentPresets.find(item => item.id === id);
+            if (!preset) return;
+
+            // 스트라타젬 프리셋과 같은 확인 절차를 사용해 Ctrl+클릭/우클릭 삭제 실수를 막는다.
+            openConfirmModal(
+                `${preset.name} 삭제`,
+                `장비 프리셋을 삭제하면 되돌릴 수 없습니다.\n정말 삭제하시겠습니까?`,
+                '삭제',
+                () => deleteEquipmentPreset(id)
+            );
+        }
+
+        function deleteEquipmentPreset(id) {
+            equipmentPresets = equipmentPresets.filter(item => item.id !== id);
+            if (selectedEquipmentPresetId === id) {
+                selectedEquipmentPresetId = '';
+                saveSelectedEquipmentPresetId('');
+            }
+            savePresets();
+            renderEquipmentPresetTabs();
+        }
+
+        function saveSelectedEquipmentPreset(id = selectedEquipmentPresetId) {
+            const preset = equipmentPresets.find(item => item.id === id);
+            if (!preset) return;
+            preset.loadout = normalizeEquipmentLoadout(getCurrentLoadout());
+            selectedEquipmentPresetId = id;
+            savePresets();
+            saveSelectedEquipmentPresetId();
+            renderEquipmentPresetTabs();
+            showPresetSaveFeedback(id);
+        }
+
+        function startEquipmentPresetInlineRename(id) {
+            editingEquipmentPresetId = id;
+            renderEquipmentPresetTabs();
+        }
+
+        function confirmEquipmentPresetInlineRename() {
+            if (!editingEquipmentPresetId) return;
+            const preset = equipmentPresets.find(item => item.id === editingEquipmentPresetId);
+            const input = document.querySelector('.equipment-preset-rename-inline');
+            const name = input?.textContent?.trim();
+            if (preset && name) preset.name = name;
+            editingEquipmentPresetId = '';
+            savePresets();
+            renderEquipmentPresetTabs();
+        }
+
+        function handleEquipmentPresetInlineRenameKey(e) {
+            if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
+            if (e.key === 'Escape') { editingEquipmentPresetId = ''; renderEquipmentPresetTabs(); }
+        }
         async function generateRandomLoadout() {
             if (!dbData) return;
             const renderToken = ++loadoutRenderToken;

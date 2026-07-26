@@ -9453,6 +9453,8 @@ namespace HD2_Helper
             private bool isProcessing = false;
             private bool isStratagemComboHeld = false;
             private readonly Dictionary<uint, uint> activeStratagemComboKeys = new();
+            // 한글 조합 중 Shift를 숨긴 채 직접 입력한 특수문자의 KeyUp도 게임에 중복 전달되지 않게 추적한다.
+            private readonly HashSet<uint> injectedShiftSymbolKeys = new();
             public bool IsInstalled => keyboardHook != IntPtr.Zero && mouseHook != IntPtr.Zero;
             public string InstallationError { get; private set; } = "";
 
@@ -9801,6 +9803,24 @@ namespace HD2_Helper
                 if (!isHangulMode)
                     return false;
 
+                if (!isDown && injectedShiftSymbolKeys.Remove(vkCode))
+                    return true;
+
+                // 한글 조합 보호를 위해 Shift 자체는 게임에 보내지 않으므로 Shift+숫자/구두점은 기호를 직접 주입한다.
+                if (isDown && IsShiftDownForHangulInput() && TryGetShiftedSymbol(vkCode, out char shiftedSymbol))
+                {
+                    if (engine.IsComposing())
+                    {
+                        engine.Flush();
+                        ExecuteInjectDiff(lastInjected, engine.GetCurrentText());
+                    }
+
+                    ResetHangulState();
+                    ExecuteInjectDiff("", shiftedSymbol.ToString());
+                    injectedShiftSymbolKeys.Add(vkCode);
+                    return true;
+                }
+
                 bool isAlphabet = (vkCode >= 0x41 && vkCode <= 0x5A);
                 bool isBack = (vkCode == (uint)Keys.Back);
 
@@ -9844,6 +9864,38 @@ namespace HD2_Helper
             private static bool IsHangulShiftKey(uint vkCode)
             {
                 return vkCode == (uint)Keys.ShiftKey || vkCode == (uint)Keys.LShiftKey || vkCode == (uint)Keys.RShiftKey;
+            }
+
+            private static bool TryGetShiftedSymbol(uint vkCode, out char symbol)
+            {
+                // 한국어/영어 QWERTY에서 Shift로 만드는 숫자열과 구두점 키를 유니코드 문자로 변환한다.
+                symbol = vkCode switch
+                {
+                    0x31 => '!',
+                    0x32 => '@',
+                    0x33 => '#',
+                    0x34 => '$',
+                    0x35 => '%',
+                    0x36 => '^',
+                    0x37 => '&',
+                    0x38 => '*',
+                    0x39 => '(',
+                    0x30 => ')',
+                    0xBD => '_',
+                    0xBB => '+',
+                    0xDB => '{',
+                    0xDD => '}',
+                    0xDC => '|',
+                    0xBA => ':',
+                    0xDE => '"',
+                    0xBC => '<',
+                    0xBE => '>',
+                    0xBF => '?',
+                    0xC0 => '~',
+                    _ => '\0'
+                };
+
+                return symbol != '\0';
             }
 
             private void ExecuteInjectDiff(string prev, string curr)
@@ -9909,6 +9961,7 @@ namespace HD2_Helper
             {
                 engine.Clear();
                 lastInjected = "";
+                injectedShiftSymbolKeys.Clear();
             }
 
             private INPUT CreateInput(ushort vk, ushort scan, uint flags)

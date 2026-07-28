@@ -3212,14 +3212,25 @@
             syncCurrentLoadoutToApp();
         }
 
-        function clearAllLoadout(shouldSync = true) {
+        function clearStratagemLoadout(shouldSync = true) {
             for (let i = 1; i <= 10; i++) {
                 renderStratagemSlot(document.getElementById(`slot-${i}`), i);
             }
 
+            if (shouldSync) syncCurrentLoadoutToApp();
+        }
+
+        function clearEquipmentLoadout(shouldSync = true) {
             ['selected-armor', 'selected-primary', 'selected-secondary', 'selected-grenade'].forEach(targetId => {
                 clearLoadoutBoxById(targetId);
             });
+
+            if (shouldSync) syncCurrentLoadoutToApp();
+        }
+
+        function clearAllLoadout(shouldSync = true) {
+            clearStratagemLoadout(false);
+            clearEquipmentLoadout(false);
             if (shouldSync) syncCurrentLoadoutToApp();
         }
 
@@ -4199,11 +4210,19 @@
             const nextPresets = presets.filter(preset => preset.id !== id);
             if (nextPresets.length === presets.length) return;
 
+            const removedSelectedPreset = selectedPresetId === id;
             presets = nextPresets;
-            if (selectedPresetId === id) {
-                selectedPresetId = '';
-                clearAllLoadout();
-                saveSelectedPresetId('');
+            if (removedSelectedPreset) {
+                // 스트라타젬 삭제는 장비 프리셋에 영향을 주지 않고, 남은 첫 프리셋만 적용한다.
+                const nextPreset = presets[0];
+                selectedPresetId = nextPreset?.id || '';
+                if (nextPreset) {
+                    applyStratagemPresetLoadout(nextPreset.loadout);
+                    applyPresetSupportWeaponSettings(nextPreset.supportWeapon);
+                } else {
+                    clearStratagemLoadout();
+                }
+                saveSelectedPresetId(selectedPresetId);
             }
             renderPresetTabs();
             savePresets();
@@ -4366,10 +4385,21 @@
         }
 
         function deleteEquipmentPreset(id) {
-            equipmentPresets = equipmentPresets.filter(item => item.id !== id);
-            if (selectedEquipmentPresetId === id) {
-                selectedEquipmentPresetId = '';
-                saveSelectedEquipmentPresetId('');
+            const nextEquipmentPresets = equipmentPresets.filter(item => item.id !== id);
+            if (nextEquipmentPresets.length === equipmentPresets.length) return;
+
+            const removedSelectedPreset = selectedEquipmentPresetId === id;
+            equipmentPresets = nextEquipmentPresets;
+            if (removedSelectedPreset) {
+                // 장비 삭제도 스트라타젬 선택은 보존하고, 남은 첫 장비 프리셋만 적용한다.
+                const nextPreset = equipmentPresets[0];
+                selectedEquipmentPresetId = nextPreset?.id || '';
+                if (nextPreset) {
+                    applyEquipmentPresetLoadout(nextPreset.loadout);
+                } else {
+                    clearEquipmentLoadout();
+                }
+                saveSelectedEquipmentPresetId(selectedEquipmentPresetId);
             }
             savePresets();
             renderEquipmentPresetTabs();

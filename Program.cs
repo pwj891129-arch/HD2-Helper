@@ -176,6 +176,8 @@ namespace HD2_Helper
         private static string?[] _currentSlots = new string?[10];
         private static string?[] _currentLoadoutSlots = new string?[4];
         private static string?[] _previousStratagemSlots = new string?[10];
+        // 오버레이 휠에서 보이는 슬롯만 제어하며 자동선택용 _currentSlots 순서는 유지한다.
+        private static bool[] _overlaySlotVisibility = CreateDefaultOverlaySlotVisibility();
         private static HashSet<string> _disabledItems = new();
 
         private static readonly Dictionary<int, uint> _slotKey = new();
@@ -1275,6 +1277,9 @@ namespace HD2_Helper
                 }
             }
 
+            if (loadoutElement.TryGetProperty("overlaySlots", out var overlaySlotsElement))
+                _overlaySlotVisibility = ReadOverlaySlotVisibility(overlaySlotsElement);
+
             // 프리셋을 바꿔도 게임 안에는 직전 스트라타젬이 남아 있으므로 자동 선택의 시작 커서 보정값으로 보관한다.
             if (!AreSameSlots(_currentSlots, slots))
                 _previousStratagemSlots = _currentSlots.ToArray();
@@ -1301,6 +1306,30 @@ namespace HD2_Helper
             }
 
             return true;
+        }
+
+        private static bool[] CreateDefaultOverlaySlotVisibility()
+        {
+            // 기본 휠은 첫 줄의 1~5번만 표시한다.
+            return Enumerable.Range(0, 10).Select(index => index < 5).ToArray();
+        }
+
+        private static bool[] ReadOverlaySlotVisibility(JsonElement element)
+        {
+            var visibility = CreateDefaultOverlaySlotVisibility();
+            if (element.ValueKind != JsonValueKind.Array)
+                return visibility;
+
+            int index = 0;
+            foreach (var value in element.EnumerateArray())
+            {
+                if (index >= visibility.Length) break;
+                if (value.ValueKind == JsonValueKind.True || value.ValueKind == JsonValueKind.False)
+                    visibility[index] = value.GetBoolean();
+                index++;
+            }
+
+            return visibility;
         }
 
         private static string?[] GetStratagemStartSlots()
@@ -3578,7 +3607,10 @@ namespace HD2_Helper
 
                 var loadout = PresetLoadout.FromJson(presetElement.TryGetProperty("loadout", out var loadoutElement) ? loadoutElement : default);
                 var supportWeapon = ReadPresetSupportWeaponSettings(presetElement, _supportWeaponSettings);
-                presets.Add(new PresetSummary(id, name.Trim(), loadout, supportWeapon, BuildPresetPreviewImages(loadout)));
+                var overlaySlots = presetElement.TryGetProperty("overlaySlots", out var overlaySlotsElement)
+                    ? ReadOverlaySlotVisibility(overlaySlotsElement)
+                    : CreateDefaultOverlaySlotVisibility();
+                presets.Add(new PresetSummary(id, name.Trim(), loadout, supportWeapon, overlaySlots, BuildPresetPreviewImages(loadout)));
             }
 
             return presets;
@@ -3804,6 +3836,7 @@ namespace HD2_Helper
                 .Take(10)
                 .Select(name => string.IsNullOrWhiteSpace(name) ? null : name)
                 .ToArray();
+            _overlaySlotVisibility = preset.OverlaySlots.ToArray();
             ApplyPresetSupportWeaponSettings(preset.SupportWeapon);
 
             SaveSetting();
@@ -6284,7 +6317,11 @@ namespace HD2_Helper
             if (!IsGameActive() || _isChat || CursorUtil.IsVisible())
                 return false;
 
-            var slotNames = _currentSlots.Where(s => !string.IsNullOrEmpty(s)).ToArray();
+            var slotNames = _currentSlots
+                .Select((name, index) => new { Name = name, Visible = index < _overlaySlotVisibility.Length && _overlaySlotVisibility[index] })
+                .Where(slot => slot.Visible && !string.IsNullOrEmpty(slot.Name))
+                .Select(slot => slot.Name!)
+                .ToArray();
             if (slotNames.Length == 0)
                 return false;
 
@@ -6359,7 +6396,7 @@ namespace HD2_Helper
             }
         }
 
-        public record PresetSummary(string Id, string Name, PresetLoadout Loadout, SupportWeaponAssistSettings SupportWeapon, Image?[] PreviewImages);
+        public record PresetSummary(string Id, string Name, PresetLoadout Loadout, SupportWeaponAssistSettings SupportWeapon, bool[] OverlaySlots, Image?[] PreviewImages);
         public record EquipmentPresetSummary(string Id, string Name, PresetLoadout Loadout, Image?[] PreviewImages);
 
         public class PresetLoadout

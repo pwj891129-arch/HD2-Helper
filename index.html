@@ -247,6 +247,20 @@
                 border-color: var(--hd-yellow);
             }
 
+            /* Shift+클릭으로 저장한 오버레이 휠 표시 상태를 슬롯 테두리로 바로 구분한다. */
+            .slot.overlay-visible {
+                border-color: #28c76f;
+            }
+
+            .slot.overlay-hidden {
+                border-color: #e05252;
+            }
+
+            .slot.overlay-visible:hover,
+            .slot.overlay-hidden:hover {
+                border-color: var(--hd-yellow);
+            }
+
             .slot:has(img) {
                 cursor: grab;
             }
@@ -2621,7 +2635,33 @@
             img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
         }
 
-        function renderStratagemSlot(slot, index, itemName = '', imgUrl = '') {
+        function getDefaultOverlaySlotVisibility() {
+            // 기본 휠 구성은 첫 줄(1~5)만 표시하고 두 번째 줄(6~10)은 숨긴다.
+            return Array.from({ length: 10 }, (_, index) => index < 5);
+        }
+
+        function normalizeOverlaySlotVisibility(source) {
+            const defaults = getDefaultOverlaySlotVisibility();
+            if (!Array.isArray(source)) return defaults;
+
+            return defaults.map((defaultValue, index) => typeof source[index] === 'boolean' ? source[index] : defaultValue);
+        }
+
+        function renderStratagemOverlayState(slot, overlayVisible) {
+            const hasPresetState = typeof overlayVisible === 'boolean';
+            slot.classList.toggle('overlay-visible', hasPresetState && overlayVisible);
+            slot.classList.toggle('overlay-hidden', hasPresetState && !overlayVisible);
+            if (hasPresetState) slot.dataset.overlayVisible = overlayVisible ? 'true' : 'false';
+            else delete slot.dataset.overlayVisible;
+        }
+
+        function getSelectedPresetOverlayVisibility() {
+            const preset = presets.find(item => item.id === selectedPresetId);
+            return preset ? normalizeOverlaySlotVisibility(preset.overlaySlots) : null;
+        }
+
+        function renderStratagemSlot(slot, index, itemName = '', imgUrl = '', overlayVisible = undefined) {
+            if (!slot) return;
             slot.dataset.itemName = itemName;
             if (itemName) slot.title = itemName;
             else slot.removeAttribute('title');
@@ -2655,6 +2695,14 @@
                     slot.appendChild(plus);
                 }
             }
+
+            const existingState = slot.dataset.overlayVisible;
+            const resolvedOverlayVisible = overlayVisible === null
+                ? null
+                : typeof overlayVisible === 'boolean'
+                    ? overlayVisible
+                    : existingState === 'true' ? true : existingState === 'false' ? false : null;
+            renderStratagemOverlayState(slot, resolvedOverlayVisible);
         }
 
         function getStratagemItemByName(name) {
@@ -3021,7 +3069,7 @@
             slot.setAttribute('tabindex', '-1');
             renderStratagemSlot(slot, i);
 
-            slot.addEventListener('click', () => openModal('스트라타젬', i));
+            slot.addEventListener('click', (event) => handleStratagemSlotClick(event, i));
             slot.addEventListener('contextmenu', (e) => clearStratagemSlot(e, i));
 
             slot.addEventListener('dragstart', handleDragStart);
@@ -3213,11 +3261,34 @@
         }
 
         function clearStratagemLoadout(shouldSync = true) {
+            const overlaySlots = getSelectedPresetOverlayVisibility();
             for (let i = 1; i <= 10; i++) {
-                renderStratagemSlot(document.getElementById(`slot-${i}`), i);
+                renderStratagemSlot(document.getElementById(`slot-${i}`), i, '', '', overlaySlots?.[i - 1] ?? null);
             }
 
             if (shouldSync) syncCurrentLoadoutToApp();
+        }
+
+        function handleStratagemSlotClick(event, index) {
+            const modifierState = window.hd2ModifierState || {};
+            const shiftPressed = event?.shiftKey || modifierState.shift === true;
+            if (!shiftPressed) {
+                openModal('스트라타젬', index);
+                return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+
+            const preset = presets.find(item => item.id === selectedPresetId);
+            if (!preset) return;
+
+            const overlaySlots = normalizeOverlaySlotVisibility(preset.overlaySlots);
+            overlaySlots[index - 1] = !overlaySlots[index - 1];
+            preset.overlaySlots = overlaySlots;
+            renderStratagemOverlayState(document.getElementById(`slot-${index}`), overlaySlots[index - 1]);
+            syncCurrentLoadoutToApp();
+            savePresets();
         }
 
         function clearEquipmentLoadout(shouldSync = true) {
@@ -3264,7 +3335,10 @@
                         ? normalizeStratagemLoadout(preset.loadout)
                         : normalizeEquipmentLoadout(preset.loadout),
                     ...(kind === 'stratagem'
-                        ? { supportWeapon: normalizePresetSupportWeaponSettings(preset.supportWeapon) }
+                        ? {
+                            supportWeapon: normalizePresetSupportWeaponSettings(preset.supportWeapon),
+                            overlaySlots: normalizeOverlaySlotVisibility(preset.overlaySlots)
+                        }
                         : {})
                 }));
         }
@@ -3322,6 +3396,9 @@
                 stratagems: Array.from({ length: 10 }, (_, index) => {
                     return document.getElementById(`slot-${index + 1}`)?.dataset.itemName || '';
                 }),
+                overlaySlots: Array.from({ length: 10 }, (_, index) => {
+                    return document.getElementById(`slot-${index + 1}`)?.dataset.overlayVisible === 'true';
+                }),
                 armor: document.getElementById('selected-armor')?.dataset.itemName || '',
                 primary: document.getElementById('selected-primary')?.dataset.itemName || '',
                 secondary: document.getElementById('selected-secondary')?.dataset.itemName || '',
@@ -3366,14 +3443,21 @@
             syncCurrentLoadoutToApp();
         }
 
-        async function applyStratagemPresetLoadout(loadout) {
+        async function applyStratagemPresetLoadout(loadout, overlaySlots = getSelectedPresetOverlayVisibility()) {
             const renderToken = ++loadoutRenderToken;
             const presetLoadout = normalizeStratagemLoadout(loadout);
+            const normalizedOverlaySlots = Array.isArray(overlaySlots) ? normalizeOverlaySlotVisibility(overlaySlots) : null;
             const imageUrls = presetLoadout.stratagems.map(name => name ? getItemImageUrl('스트라타젬', name) : '');
             if (renderToken !== loadoutRenderToken) return;
 
             presetLoadout.stratagems.forEach((name, index) => {
-                renderStratagemSlot(document.getElementById(`slot-${index + 1}`), index + 1, name, imageUrls[index] || '');
+                renderStratagemSlot(
+                    document.getElementById(`slot-${index + 1}`),
+                    index + 1,
+                    name,
+                    imageUrls[index] || '',
+                    normalizedOverlaySlots ? normalizedOverlaySlots[index] : null
+                );
             });
             syncCurrentLoadoutToApp();
         }
@@ -3975,7 +4059,8 @@
                 id: `preset-${Date.now()}`,
                 name: getNextPresetName(),
                 loadout: normalizeStratagemLoadout(),
-                supportWeapon: getCurrentPresetSupportWeapon()
+                supportWeapon: getCurrentPresetSupportWeapon(),
+                overlaySlots: getDefaultOverlaySlotVisibility()
             };
 
             const insertIndex = insertAfterId
@@ -4059,7 +4144,8 @@
                 id: `preset-${Date.now()}`,
                 name: getDuplicatePresetName(preset.name),
                 loadout: normalizeStratagemLoadout(preset.loadout),
-                supportWeapon: normalizePresetSupportWeaponSettings(preset.supportWeapon)
+                supportWeapon: normalizePresetSupportWeaponSettings(preset.supportWeapon),
+                overlaySlots: normalizeOverlaySlotVisibility(preset.overlaySlots)
             };
 
             presets.splice(sourceIndex + 1, 0, duplicatedPreset);
@@ -4234,6 +4320,7 @@
 
             preset.loadout = normalizeStratagemLoadout(getCurrentLoadout());
             preset.supportWeapon = getCurrentPresetSupportWeapon();
+            preset.overlaySlots = normalizeOverlaySlotVisibility(getCurrentLoadout().overlaySlots);
             selectedPresetId = id;
             renderPresetTabs();
             savePresets();

@@ -2724,32 +2724,24 @@
             return !!item && typeof item.Desc === 'string' && item.Desc.includes('배낭');
         }
 
-        function isCombatStratagemSlot(slotIndex) {
-            return slotIndex >= 1 && slotIndex <= 4;
-        }
-
-        function hasExosuitEquippedExcept(slotIndex) {
-            // 엑소슈트 중복 제한은 실제 전투에 쓰는 1~4번 슬롯에만 적용한다.
-            if (!isCombatStratagemSlot(slotIndex)) return false;
-
-            return Array.from(slotsContainer.querySelectorAll('.slot')).some((slot, index) => {
-                const candidateIndex = index + 1;
-                return isCombatStratagemSlot(candidateIndex)
-                    && candidateIndex !== slotIndex
-                    && isExosuitStratagem(slot.dataset.itemName);
-            });
+        function hasSameExosuitEquippedExcept(slotIndex, candidateName) {
+            // 엑소슈트는 보관 슬롯을 포함해 같은 종류를 두 개 장착하지 못하도록 한다.
+            return Array.from(slotsContainer.querySelectorAll('.slot')).some((slot, index) =>
+                index + 1 !== slotIndex && slot.dataset.itemName === candidateName);
         }
 
         function canSwapStratagemSlots(draggedIndex, draggedName, targetIndex, targetName) {
-            // 5~10번 보관 슬롯은 엑소슈트 중복을 허용하지만, 교체 뒤 1~4번에는 하나만 남아야 한다.
-            let combatExosuitCount = 0;
-            for (let index = 1; index <= 4; index++) {
+            // 드래그 뒤에도 동일한 엑소슈트가 두 슬롯에 남지 않도록 전체 슬롯을 검사한다.
+            const exosuitNames = new Set();
+            for (let index = 1; index <= 10; index++) {
                 let name = document.getElementById(`slot-${index}`)?.dataset.itemName || '';
                 if (index === draggedIndex) name = targetName;
                 else if (index === targetIndex) name = draggedName;
-                if (isExosuitStratagem(name)) combatExosuitCount++;
+                if (!isExosuitStratagem(name)) continue;
+                if (exosuitNames.has(name)) return false;
+                exosuitNames.add(name);
             }
-            return combatExosuitCount <= 1;
+            return true;
         }
 
         function getRandomItem(pool) {
@@ -4700,7 +4692,6 @@
                 renderModalSlotSelector(slotIndex, previousSlotScrollLeft);
 
                 const equippedStratagems = [];
-                let hasCombatExosuit = false;
                 let currentSlotItemName = null;
                 const allSlots = slotsContainer.querySelectorAll('.slot');
 
@@ -4710,11 +4701,6 @@
                     if (index + 1 === slotIndex) currentSlotItemName = name;
                     else {
                         equippedStratagems.push(name);
-                        if (isCombatStratagemSlot(slotIndex)
-                            && isCombatStratagemSlot(index + 1)
-                            && isExosuitStratagem(name)) {
-                            hasCombatExosuit = true;
-                        }
                     }
                 });
 
@@ -4734,9 +4720,7 @@
                         const imgUrl = `https://hd2.local/images/Stratagems/${item.Name}.png`;
                         let statusClass = '';
                         if (item.Name === currentSlotItemName) statusClass = 'selected-current';
-                        else if (isExosuitStratagem(item)) {
-                            if (hasCombatExosuit) statusClass = 'disabled';
-                        } else if (equippedStratagems.includes(item.Name)) {
+                        else if (equippedStratagems.includes(item.Name)) {
                             statusClass = 'disabled';
                         }
 
@@ -4916,7 +4900,7 @@
             loadoutRenderToken++;
 
             if (currentTargetSlot.type === '스트라타젬') {
-                if (isExosuitStratagem(name) && hasExosuitEquippedExcept(currentTargetSlot.index)) return;
+                if (isExosuitStratagem(name) && hasSameExosuitEquippedExcept(currentTargetSlot.index, name)) return;
                 const slot = document.getElementById(`slot-${currentTargetSlot.index}`);
                 renderStratagemSlot(slot, currentTargetSlot.index, name, imgUrl);
                 syncCurrentLoadoutToApp();

@@ -2724,10 +2724,32 @@
             return !!item && typeof item.Desc === 'string' && item.Desc.includes('배낭');
         }
 
+        function isCombatStratagemSlot(slotIndex) {
+            return slotIndex >= 1 && slotIndex <= 4;
+        }
+
         function hasExosuitEquippedExcept(slotIndex) {
+            // 엑소슈트 중복 제한은 실제 전투에 쓰는 1~4번 슬롯에만 적용한다.
+            if (!isCombatStratagemSlot(slotIndex)) return false;
+
             return Array.from(slotsContainer.querySelectorAll('.slot')).some((slot, index) => {
-                return index + 1 !== slotIndex && isExosuitStratagem(slot.dataset.itemName);
+                const candidateIndex = index + 1;
+                return isCombatStratagemSlot(candidateIndex)
+                    && candidateIndex !== slotIndex
+                    && isExosuitStratagem(slot.dataset.itemName);
             });
+        }
+
+        function canSwapStratagemSlots(draggedIndex, draggedName, targetIndex, targetName) {
+            // 5~10번 보관 슬롯은 엑소슈트 중복을 허용하지만, 교체 뒤 1~4번에는 하나만 남아야 한다.
+            let combatExosuitCount = 0;
+            for (let index = 1; index <= 4; index++) {
+                let name = document.getElementById(`slot-${index}`)?.dataset.itemName || '';
+                if (index === draggedIndex) name = targetName;
+                else if (index === targetIndex) name = draggedName;
+                if (isExosuitStratagem(name)) combatExosuitCount++;
+            }
+            return combatExosuitCount <= 1;
         }
 
         function getRandomItem(pool) {
@@ -3206,6 +3228,8 @@
                 const draggedImg = draggedRealSlot?.querySelector('img')?.getAttribute('src') || '';
                 const targetName = targetRealSlot?.dataset.itemName || '';
                 const targetImg = targetRealSlot?.querySelector('img')?.getAttribute('src') || '';
+
+                if (!canSwapStratagemSlots(draggedIndex, draggedName, targetIndex, targetName)) return false;
 
                 renderStratagemSlot(targetRealSlot, targetIndex, draggedName, draggedImg);
                 renderStratagemSlot(draggedRealSlot, draggedIndex, targetName, targetImg);
@@ -4676,7 +4700,7 @@
                 renderModalSlotSelector(slotIndex, previousSlotScrollLeft);
 
                 const equippedStratagems = [];
-                let hasEquippedExosuit = false;
+                let hasCombatExosuit = false;
                 let currentSlotItemName = null;
                 const allSlots = slotsContainer.querySelectorAll('.slot');
 
@@ -4686,7 +4710,11 @@
                     if (index + 1 === slotIndex) currentSlotItemName = name;
                     else {
                         equippedStratagems.push(name);
-                        if (isExosuitStratagem(name)) hasEquippedExosuit = true;
+                        if (isCombatStratagemSlot(slotIndex)
+                            && isCombatStratagemSlot(index + 1)
+                            && isExosuitStratagem(name)) {
+                            hasCombatExosuit = true;
+                        }
                     }
                 });
 
@@ -4706,8 +4734,11 @@
                         const imgUrl = `https://hd2.local/images/Stratagems/${item.Name}.png`;
                         let statusClass = '';
                         if (item.Name === currentSlotItemName) statusClass = 'selected-current';
-                        else if (equippedStratagems.includes(item.Name)) statusClass = 'disabled';
-                        else if (hasEquippedExosuit && isExosuitStratagem(item)) statusClass = 'disabled';
+                        else if (isExosuitStratagem(item)) {
+                            if (hasCombatExosuit) statusClass = 'disabled';
+                        } else if (equippedStratagems.includes(item.Name)) {
+                            statusClass = 'disabled';
+                        }
 
                         const card = document.createElement('div');
                         card.className = `mini-card ${statusClass}`;

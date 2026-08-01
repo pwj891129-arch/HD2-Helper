@@ -1137,6 +1137,10 @@
             grid-template-columns: repeat(5, minmax(0, 1fr));
         }
 
+        .equipment-grid-layout.equipment-grid-armor {
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+        }
+
         .equipment-grid-layout .mini-card {
             min-height: 118px;
             justify-content: space-between;
@@ -1154,6 +1158,68 @@
             width: var(--modal-square-image-size);
             height: var(--modal-square-image-size);
             margin-bottom: 0;
+        }
+
+        .equipment-grid-layout.equipment-grid-armor .mini-card {
+            min-height: 154px;
+            justify-content: flex-start;
+        }
+
+        .equipment-grid-layout.equipment-grid-armor .mini-card img.img-ratio-armor {
+            width: var(--modal-square-image-size);
+            height: var(--modal-square-image-size);
+            margin-bottom: 0;
+            object-fit: contain;
+        }
+
+        .armor-grid-info {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+            min-width: 0;
+            gap: 3px;
+        }
+
+        .armor-grid-name {
+            width: 100%;
+            color: var(--hd-text);
+            font-size: var(--font);
+            font-weight: bold;
+            line-height: 1.2;
+            text-align: center;
+            overflow-wrap: anywhere;
+        }
+
+        .armor-grid-passives {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 2px 5px;
+            width: 100%;
+        }
+
+        .armor-grid-passive {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            min-width: 0;
+            color: var(--hd-yellow);
+            font-size: calc(var(--font) * 0.88);
+            line-height: 1.15;
+        }
+
+        .armor-grid-passive img {
+            width: 18px !important;
+            height: 18px !important;
+            flex: 0 0 auto;
+            object-fit: contain;
+        }
+
+        .armor-grid-passive span {
+            min-width: 0;
+            overflow-wrap: anywhere;
+            text-align: center;
         }
 
         .armor-modal-controls {
@@ -3090,27 +3156,54 @@
                 .filter(Boolean);
         }
 
-        function getArmorItemsForModal() {
-            const armorItems = flattenDatabaseType('방어구')
-                .filter(item => item?.Passives && !excludedItems.has(item.Name));
-            const filteredItems = armorPassiveFilter
-                ? armorItems.filter(item => getArmorPassiveNames(item).includes(armorPassiveFilter))
-                : armorItems;
+        function compareArmorItems(left, right) {
+            if (armorSortMode === 'passive') {
+                const passiveCompare = String(left.Passives || '').localeCompare(String(right.Passives || ''), 'ko');
+                if (passiveCompare !== 0) return passiveCompare;
+            } else {
+                const ratingCompare = getArmorRating(left) - getArmorRating(right);
+                if (ratingCompare !== 0) return ratingCompare;
+            }
+            return String(left.Name || '').localeCompare(String(right.Name || ''), 'ko');
+        }
 
-            return filteredItems.sort((left, right) => {
-                if (armorSortMode === 'passive') {
-                    const passiveCompare = String(left.Passives || '').localeCompare(String(right.Passives || ''), 'ko');
-                    if (passiveCompare !== 0) return passiveCompare;
-                } else {
-                    const ratingCompare = getArmorRating(left) - getArmorRating(right);
-                    if (ratingCompare !== 0) return ratingCompare;
-                }
-                return String(left.Name || '').localeCompare(String(right.Name || ''), 'ko');
-            });
+        function getArmorModalGroups() {
+            // 정렬은 각 장갑 등급 구역 안에서만 적용해 경량·일반·중량 분류가 섞이지 않게 유지한다.
+            return ['경량', '일반', '중량']
+                .map(category => {
+                    const items = (dbData?.['방어구']?.[category] || [])
+                        .filter(item => item?.Passives && !excludedItems.has(item.Name))
+                        .filter(item => !armorPassiveFilter || getArmorPassiveNames(item).includes(armorPassiveFilter))
+                        .sort(compareArmorItems);
+                    return [category, items];
+                })
+                .filter(([, items]) => items.length > 0);
+        }
+
+        function getArmorTooltipDescription(item, armorDescription) {
+            const passiveDetails = getArmorPassiveNames(item)
+                .map(passiveName => {
+                    const passive = getPassiveItem(passiveName);
+                    return `${passiveName}\n${passive?.Desc || '상세 효과 데이터가 없습니다.'}`;
+                })
+                .join('\n\n');
+            return [armorDescription, passiveDetails].filter(Boolean).join('\n\n');
+        }
+
+        function getArmorGridPassiveHtml(item) {
+            return getArmorPassiveNames(item)
+                .map(passiveName => `
+                    <div class="armor-grid-passive">
+                        <img src="https://hd2.local/images/passives/${passiveName}.png" onerror="setImageFallback(this, 48, 48)" />
+                        <span>${passiveName}</span>
+                    </div>
+                `)
+                .join('');
         }
 
         function getEquipmentGridLayoutClass(type) {
             if (useLegacyEquipmentLayout) return 'item-list-layout';
+            if (type === '방어구') return 'item-grid-layout equipment-grid-layout equipment-grid-armor';
             if (type === '주 무기') return 'item-grid-layout equipment-grid-layout equipment-grid-primary';
             if (type === '보조 무기') return 'item-grid-layout equipment-grid-layout equipment-grid-secondary';
             if (type === '투척 무기') return 'item-grid-layout equipment-grid-layout equipment-grid-grenade';
@@ -5090,9 +5183,9 @@
                 const currentEquippedName = document.getElementById(targetId) ? (document.getElementById(targetId).dataset.itemName || null) : null;
                 if (type === '방어구' && !useLegacyEquipmentLayout) renderArmorControls();
 
-                // 기존 레이아웃은 방어구도 원래 카테고리별 목록으로 보여주고, 새 레이아웃에서만 정렬/필터를 적용한다.
+                // 기존 레이아웃은 방어구도 원래 카테고리별 목록으로 보여주고, 새 레이아웃은 경량·일반·중량 구역을 유지한 채 정렬한다.
                 const modalGroups = type === '방어구' && !useLegacyEquipmentLayout
-                    ? [['방어구', getArmorItemsForModal()]]
+                    ? getArmorModalGroups()
                     : Object.keys(dbData[type])
                         .filter(category => !isHiddenDatabaseCategory(type, category))
                         .map(category => [category, dbData[type][category]]);
@@ -5105,7 +5198,7 @@
                     groupWrap.innerHTML = `<div class="category-title">${category}</div>`;
 
                     const listContainerLayout = document.createElement('div');
-                    const useGridLayout = !useLegacyEquipmentLayout && ['주 무기', '보조 무기', '투척 무기'].includes(type);
+                    const useGridLayout = !useLegacyEquipmentLayout && ['방어구', '주 무기', '보조 무기', '투척 무기'].includes(type);
                     listContainerLayout.className = useGridLayout ? getEquipmentGridLayoutClass(type) : 'item-list-layout';
 
                     groupData.forEach(item => {
@@ -5140,7 +5233,15 @@
                         card.setAttribute('data-rule-disabled', 'false');
                         card.setAttribute('tabindex', '-1');
                         card.innerHTML = useGridLayout
-                            ? `
+                            ? type === '방어구'
+                                ? `
+                                    <img class="${ratioClass}" src="${imgUrl}" onerror="setImageFallback(this, ${svgW}, ${svgH})" />
+                                    <div class="armor-grid-info">
+                                        <div class="armor-grid-name">${item.Name}</div>
+                                        <div class="armor-grid-passives">${getArmorGridPassiveHtml(item)}</div>
+                                    </div>
+                                `
+                                : `
                                 <img class="${ratioClass}" src="${imgUrl}" onerror="setImageFallback(this, ${svgW}, ${svgH})" />
                                 <div class="name">${item.Name}</div>
                             `
@@ -5155,7 +5256,12 @@
                         if (!imgUrl) setImageFallback(card.querySelector('img'), svgW, svgH);
                         card.addEventListener('contextmenu', (e) => toggleExcludedItem(e, item.Name, type));
                         card.addEventListener('click', () => selectItem(item.Name, imgUrl));
-                        if (useGridLayout) attachItemHoverTooltip(card, item.Name, description);
+                        if (useGridLayout) {
+                            const tooltipDescription = type === '방어구'
+                                ? getArmorTooltipDescription(item, description)
+                                : description;
+                            attachItemHoverTooltip(card, item.Name, tooltipDescription);
+                        }
 
                         listContainerLayout.appendChild(card);
                     });

@@ -1246,7 +1246,8 @@
         .item-hover-tooltip {
             display: none;
             position: fixed;
-            z-index: 200;
+            /* 장비 선택창(modal-overlay)보다 위에 그려져야 마우스오버 설명이 가려지지 않는다. */
+            z-index: 1100;
             width: min(300px, calc(100vw - 24px));
             padding: var(--space-md);
             border: 1px solid var(--hd-yellow);
@@ -3120,11 +3121,14 @@
             const tooltip = document.getElementById('item-hover-tooltip');
             if (!tooltip || tooltip.style.display !== 'block') return;
 
-            const gap = 14;
-            const maxLeft = window.innerWidth - tooltip.offsetWidth - gap;
-            const maxTop = window.innerHeight - tooltip.offsetHeight - gap;
-            tooltip.style.left = `${Math.max(gap, Math.min(event.clientX + gap, maxLeft))}px`;
-            tooltip.style.top = `${Math.max(gap, Math.min(event.clientY + gap, maxTop))}px`;
+            // 포인터를 가리지 않도록 툴팁 시작점을 우측 하단으로 충분히 떨어뜨리고, 화면 끝에서는 안쪽으로 보정한다.
+            const edgeMargin = 12;
+            const offsetX = 24;
+            const offsetY = 42;
+            const maxLeft = window.innerWidth - tooltip.offsetWidth - edgeMargin;
+            const maxTop = window.innerHeight - tooltip.offsetHeight - edgeMargin;
+            tooltip.style.left = `${Math.max(edgeMargin, Math.min(event.clientX + offsetX, maxLeft))}px`;
+            tooltip.style.top = `${Math.max(edgeMargin, Math.min(event.clientY + offsetY, maxTop))}px`;
         }
 
         function hideItemHoverTooltip() {
@@ -3135,9 +3139,18 @@
         function attachItemHoverTooltip(element, title, description) {
             if (!element) return;
 
-            // 게임 오버레이에서도 안정적으로 보이는 스트라타젬 이름과 같은 브라우저 기본 툴팁을 사용한다.
-            // 제목과 설명을 줄바꿈으로 분리해 긴 장비 설명도 카드 위에서 바로 확인할 수 있게 한다.
-            element.title = description ? `${title}\n${description}` : title;
+            // 자체 툴팁은 마우스 위치와 겹치지 않도록 제어할 수 있고, 선택창보다 위 레이어에서 설명을 표시한다.
+            element.removeAttribute('title');
+            element.addEventListener('mouseenter', event => {
+                const tooltip = document.getElementById('item-hover-tooltip');
+                document.getElementById('item-hover-tooltip-title').textContent = title;
+                document.getElementById('item-hover-tooltip-body').textContent = description || '상세 정보가 없습니다.';
+                tooltip.style.display = 'block';
+                positionItemHoverTooltip(event);
+            });
+            element.addEventListener('mousemove', positionItemHoverTooltip);
+            element.addEventListener('mouseleave', hideItemHoverTooltip);
+            element.addEventListener('click', hideItemHoverTooltip);
         }
 
         function renderArmorControls() {

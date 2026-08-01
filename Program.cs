@@ -205,6 +205,8 @@ namespace HD2_Helper
         private static uint _presetOverlayKey = (uint)Keys.F4;
         private static uint _chatKey = (uint)Keys.Enter;
         private static bool _stratagemCompactLayout;
+        // 장비 선택창은 새 그리드형과 기존 목록형 중 사용자가 고른 형태를 모든 WebView에 동일하게 적용한다.
+        private static bool _useLegacyEquipmentLayout;
         private static bool _stratagemReselectEnabled = true;
         private static bool _testModeEnabled;
         private static bool _pauseCrosshairTimer;
@@ -1048,6 +1050,16 @@ namespace HD2_Helper
                         SendSettingsToWeb();
                     }
                 }
+                else if (type == "SET_LEGACY_EQUIPMENT_LAYOUT")
+                {
+                    if (doc.RootElement.TryGetProperty("enabled", out var enabledElement))
+                    {
+                        // 목록형 전환값은 장비 선택 창을 새로 열 때뿐 아니라 현재 열린 모든 WebView에도 즉시 반영한다.
+                        _useLegacyEquipmentLayout = enabledElement.GetBoolean();
+                        SaveSetting();
+                        SendSettingsToWeb();
+                    }
+                }
                 else if (type == "SET_STRATAGEM_RESELECT_ENABLED")
                 {
                     if (doc.RootElement.TryGetProperty("enabled", out var enabledElement))
@@ -1565,6 +1577,11 @@ namespace HD2_Helper
                     if (!uint.TryParse(value, out uint vk)) continue;
                     _stratagemCompactLayout = vk != 0;
                 }
+                else if (key.Equals("useLegacyEquipmentLayout", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!uint.TryParse(value, out uint vk)) continue;
+                    _useLegacyEquipmentLayout = vk != 0;
+                }
                 else if (key.Equals("stratagemReselectEnabled", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!uint.TryParse(value, out uint vk)) continue;
@@ -1684,6 +1701,7 @@ namespace HD2_Helper
             {
                 $"inputDelay={Math.Clamp(_inputDelay, 30, 100)}",
                 $"stratagemCompactLayout={(_stratagemCompactLayout ? 1 : 0)}",
+                $"useLegacyEquipmentLayout={(_useLegacyEquipmentLayout ? 1 : 0)}",
                 $"stratagemReselectEnabled={(_stratagemReselectEnabled ? 1 : 0)}",
                 $"testModeEnabled={(_testModeEnabled ? 1 : 0)}",
                 $"pauseCrosshairTimer={(_pauseCrosshairTimer ? 1 : 0)}",
@@ -1923,6 +1941,7 @@ namespace HD2_Helper
                 type = "SETTINGS_LOADED",
                 inputDelay = Math.Clamp(_inputDelay, 30, 100),
                 stratagemCompactLayout = _stratagemCompactLayout,
+                useLegacyEquipmentLayout = _useLegacyEquipmentLayout,
                 stratagemReselectEnabled = _stratagemReselectEnabled,
                 testModeEnabled = _testModeEnabled,
                 timerPauses = new

@@ -1121,6 +1121,156 @@
             gap: var(--space-md);
         }
 
+        .equipment-grid-layout {
+            align-items: stretch;
+        }
+
+        .equipment-grid-layout.equipment-grid-primary {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .equipment-grid-layout.equipment-grid-secondary {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+
+        .equipment-grid-layout.equipment-grid-grenade {
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+        }
+
+        .equipment-grid-layout .mini-card {
+            min-height: 118px;
+            justify-content: space-between;
+            gap: var(--space-sm);
+            cursor: pointer;
+        }
+
+        .equipment-grid-layout .mini-card img.img-ratio-weapon {
+            width: min(100%, var(--modal-weapon-image-width));
+            height: var(--modal-weapon-image-height);
+            margin-bottom: 0;
+        }
+
+        .equipment-grid-layout .mini-card img.img-ratio-grenade {
+            width: var(--modal-square-image-size);
+            height: var(--modal-square-image-size);
+            margin-bottom: 0;
+        }
+
+        .armor-modal-controls {
+            display: none;
+            position: relative;
+            padding: 0 var(--space-md) var(--space-md);
+            background: var(--hd-bg);
+        }
+
+        .armor-sort-buttons {
+            display: flex;
+            gap: var(--space-sm);
+        }
+
+        .armor-sort-button {
+            flex: 1;
+            min-height: 30px;
+            border: 1px solid var(--hd-border);
+            border-radius: var(--radius);
+            background: var(--hd-dark-box);
+            color: var(--hd-text-dark);
+            font: inherit;
+            font-size: var(--font);
+            cursor: pointer;
+        }
+
+        .armor-sort-button.active {
+            color: var(--hd-yellow);
+            border-color: var(--hd-yellow);
+            background: rgba(255, 232, 10, 0.12);
+        }
+
+        .armor-passive-dropdown {
+            display: none;
+            position: absolute;
+            top: calc(100% - var(--space-md));
+            left: var(--space-md);
+            right: var(--space-md);
+            z-index: 8;
+            max-height: 220px;
+            overflow-y: auto;
+            border: 1px solid var(--hd-border);
+            border-radius: var(--radius);
+            background: var(--hd-dark-box);
+            box-shadow: 0 10px 22px rgba(0, 0, 0, 0.45);
+        }
+
+        .armor-passive-dropdown.open {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .armor-passive-option {
+            display: flex;
+            align-items: center;
+            gap: var(--space-sm);
+            min-width: 0;
+            min-height: 34px;
+            padding: var(--space-sm) var(--space-md);
+            border: 0;
+            border-right: 1px solid rgba(255, 255, 255, 0.08);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            background: transparent;
+            color: var(--hd-text);
+            font: inherit;
+            font-size: var(--font);
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .armor-passive-option:hover,
+        .armor-passive-option.selected {
+            background: rgba(255, 232, 10, 0.12);
+            color: var(--hd-yellow);
+        }
+
+        .armor-passive-option img {
+            width: 22px;
+            height: 22px;
+            flex: 0 0 auto;
+            object-fit: contain;
+        }
+
+        .armor-passive-option span {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .item-hover-tooltip {
+            display: none;
+            position: fixed;
+            z-index: 200;
+            width: min(300px, calc(100vw - 24px));
+            padding: var(--space-md);
+            border: 1px solid var(--hd-yellow);
+            border-radius: var(--radius);
+            background: rgba(18, 18, 18, 0.97);
+            box-shadow: 0 8px 18px rgba(0, 0, 0, 0.45);
+            pointer-events: none;
+            color: var(--hd-text);
+        }
+
+        .item-hover-tooltip-title {
+            margin-bottom: var(--space-sm);
+            color: var(--hd-yellow);
+            font-size: var(--font);
+            font-weight: bold;
+        }
+
+        .item-hover-tooltip-body {
+            color: var(--hd-text);
+            font-size: var(--font);
+            line-height: var(--line-normal);
+            white-space: pre-line;
+        }
+
         .mini-card {
             background: var(--hd-bg);
             border: 2px solid var(--hd-border);
@@ -1449,6 +1599,10 @@
                         <span class="setting-label">스트라타젬 재선택</span>
                         <input id="setting-stratagem-reselect-enabled" type="checkbox" onchange="toggleStratagemReselectEnabled(this.checked)">
                     </label>
+                    <label class="crosshair-row">
+                        <span class="setting-label">이전 레이아웃 사용</span>
+                        <input id="setting-legacy-equipment-layout" type="checkbox" onchange="toggleLegacyEquipmentLayout(this.checked)">
+                    </label>
                     <div class="setting-row" data-setting-row="helperEditorKey" onclick="startKeyCapture('helperEditorKey')">
                         <span class="setting-label">창 열기 단축키</span>
                         <button class="setting-key-btn" type="button" data-setting-key="helperEditorKey" tabindex="-1"></button>
@@ -1712,18 +1866,30 @@
         <div class="modal-content" onclick="event.stopPropagation()">
             <div class="modal-header">
                 <h3 id="modal-title"></h3>
-                <button class="close-btn" onclick="document.getElementById('item-modal').style.display='none'" tabindex="-1">닫기</button>
+                <button class="close-btn" onclick="hideItemHoverTooltip(); document.getElementById('item-modal').style.display='none'" tabindex="-1">닫기</button>
             </div>
             <div class="modal-slot-selector" id="modal-slot-selector"></div>
             <div class="modal-search-wrapper">
                 <input type="text" id="modal-search" class="modal-search-input" placeholder="이름으로 검색" oninput="filterModalItems()" tabindex="-1">
                 <button type="button" id="modal-search-clear" class="modal-search-clear" onclick="clearModalSearch()" tabindex="-1">✕</button>
             </div>
+            <div class="armor-modal-controls" id="armor-modal-controls">
+                <div class="armor-sort-buttons">
+                    <button type="button" class="armor-sort-button" id="armor-sort-rating" onclick="setArmorSortMode('rating')" tabindex="-1">장갑 등급</button>
+                    <button type="button" class="armor-sort-button" id="armor-sort-passive" onclick="setArmorSortMode('passive')" tabindex="-1">패시브별</button>
+                </div>
+                <div class="armor-passive-dropdown" id="armor-passive-dropdown"></div>
+            </div>
             <div class="modal-body" id="modal-item-list">
                 <div id="no-result-message" class="no-result-message">검색 결과가 없습니다.</div>
                 <div id="modal-dynamic-content"></div>
             </div>
         </div>
+    </div>
+
+    <div class="item-hover-tooltip" id="item-hover-tooltip">
+        <div class="item-hover-tooltip-title" id="item-hover-tooltip-title"></div>
+        <div class="item-hover-tooltip-body" id="item-hover-tooltip-body"></div>
     </div>
 
     <script>
@@ -1802,7 +1968,11 @@
         let modalSlotDragPointerX = 0;
         let modalSlotDragLastScrollTime = 0;
         let stratagemCompactLayout = false;
+        // OFF는 장비별 새 그리드/정렬 UI, ON은 이전 목록형 선택창을 그대로 사용한다.
+        let useLegacyEquipmentLayout = false;
         let stratagemReselectEnabled = true;
+        let armorSortMode = 'rating';
+        let armorPassiveFilter = '';
         let testModeEnabled = false;
         let muteGameAudioWhenInactive = false;
         let excludeOverlaysFromCapture = false;
@@ -2030,6 +2200,19 @@
             // 재선택을 끄면 자동선택은 OCR 보정 없이 프리셋 좌표만 따라가므로 빈 슬롯 최초 선택에 적합하다.
             stratagemReselectEnabled = enabled === true;
             postAppMessage({ type: 'SET_STRATAGEM_RESELECT_ENABLED', enabled: stratagemReselectEnabled });
+        }
+
+        async function toggleLegacyEquipmentLayout(enabled) {
+            // 현재 열린 장비 선택창도 즉시 다시 그려 두 레이아웃을 비교하며 고를 수 있게 한다.
+            useLegacyEquipmentLayout = enabled === true;
+            postAppMessage({ type: 'SET_LEGACY_EQUIPMENT_LAYOUT', enabled: useLegacyEquipmentLayout });
+
+            if (currentTargetSlot && currentTargetSlot.type !== '스트라타젬') {
+                await openModal(currentTargetSlot.type, null, {
+                    preserveScroll: true,
+                    preserveArmorState: true
+                });
+            }
         }
 
         function applySettingsPanelCollapsed() {
@@ -2438,12 +2621,15 @@
             currentInputDelay = data.inputDelay ?? 30;
             updateInputDelayLabel(currentInputDelay);
             stratagemCompactLayout = data.stratagemCompactLayout === true;
+            useLegacyEquipmentLayout = data.useLegacyEquipmentLayout === true;
             stratagemReselectEnabled = data.stratagemReselectEnabled !== false;
             testModeEnabled = data.testModeEnabled === true;
             muteGameAudioWhenInactive = data.muteGameAudioWhenInactive === true;
             excludeOverlaysFromCapture = data.excludeOverlaysFromCapture === true;
             const stratagemReselectControl = document.getElementById('setting-stratagem-reselect-enabled');
             if (stratagemReselectControl) stratagemReselectControl.checked = stratagemReselectEnabled;
+            const legacyEquipmentLayoutControl = document.getElementById('setting-legacy-equipment-layout');
+            if (legacyEquipmentLayoutControl) legacyEquipmentLayoutControl.checked = useLegacyEquipmentLayout;
             const testModeControl = document.getElementById('setting-test-mode');
             if (testModeControl) testModeControl.checked = testModeEnabled;
             const timerPauses = data.timerPauses || {};
@@ -2889,6 +3075,137 @@
             if (!Array.isArray(passiveItems)) return null;
 
             return passiveItems.find(item => item.Name === name) ?? null;
+        }
+
+        function getArmorRating(item) {
+            const match = String(item?.Desc || '').match(/장갑 등급\s*(\d+)/);
+            return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
+        }
+
+        function getArmorPassiveNames(item) {
+            return String(item?.Passives || '')
+                .split(',')
+                .map(name => name.trim())
+                .filter(Boolean);
+        }
+
+        function getArmorItemsForModal() {
+            const armorItems = flattenDatabaseType('방어구')
+                .filter(item => item?.Passives && !excludedItems.has(item.Name));
+            const filteredItems = armorPassiveFilter
+                ? armorItems.filter(item => getArmorPassiveNames(item).includes(armorPassiveFilter))
+                : armorItems;
+
+            return filteredItems.sort((left, right) => {
+                if (armorSortMode === 'passive') {
+                    const passiveCompare = String(left.Passives || '').localeCompare(String(right.Passives || ''), 'ko');
+                    if (passiveCompare !== 0) return passiveCompare;
+                } else {
+                    const ratingCompare = getArmorRating(left) - getArmorRating(right);
+                    if (ratingCompare !== 0) return ratingCompare;
+                }
+                return String(left.Name || '').localeCompare(String(right.Name || ''), 'ko');
+            });
+        }
+
+        function getEquipmentGridLayoutClass(type) {
+            if (useLegacyEquipmentLayout) return 'item-list-layout';
+            if (type === '주 무기') return 'item-grid-layout equipment-grid-layout equipment-grid-primary';
+            if (type === '보조 무기') return 'item-grid-layout equipment-grid-layout equipment-grid-secondary';
+            if (type === '투척 무기') return 'item-grid-layout equipment-grid-layout equipment-grid-grenade';
+            return 'item-list-layout';
+        }
+
+        function positionItemHoverTooltip(event) {
+            const tooltip = document.getElementById('item-hover-tooltip');
+            if (!tooltip || tooltip.style.display !== 'block') return;
+
+            const gap = 14;
+            const maxLeft = window.innerWidth - tooltip.offsetWidth - gap;
+            const maxTop = window.innerHeight - tooltip.offsetHeight - gap;
+            tooltip.style.left = `${Math.max(gap, Math.min(event.clientX + gap, maxLeft))}px`;
+            tooltip.style.top = `${Math.max(gap, Math.min(event.clientY + gap, maxTop))}px`;
+        }
+
+        function hideItemHoverTooltip() {
+            const tooltip = document.getElementById('item-hover-tooltip');
+            if (tooltip) tooltip.style.display = 'none';
+        }
+
+        function attachItemHoverTooltip(element, title, description) {
+            if (!element || !description) return;
+
+            element.addEventListener('mouseenter', event => {
+                const tooltip = document.getElementById('item-hover-tooltip');
+                document.getElementById('item-hover-tooltip-title').textContent = title;
+                document.getElementById('item-hover-tooltip-body').textContent = description;
+                tooltip.style.display = 'block';
+                positionItemHoverTooltip(event);
+            });
+            element.addEventListener('mousemove', positionItemHoverTooltip);
+            element.addEventListener('mouseleave', hideItemHoverTooltip);
+            element.addEventListener('click', hideItemHoverTooltip);
+        }
+
+        function renderArmorControls() {
+            const controls = document.getElementById('armor-modal-controls');
+            const ratingButton = document.getElementById('armor-sort-rating');
+            const passiveButton = document.getElementById('armor-sort-passive');
+            const dropdown = document.getElementById('armor-passive-dropdown');
+            if (!controls || !ratingButton || !passiveButton || !dropdown) return;
+
+            controls.style.display = 'block';
+            ratingButton.classList.toggle('active', armorSortMode === 'rating');
+            passiveButton.classList.toggle('active', armorSortMode === 'passive');
+            dropdown.innerHTML = '';
+
+            const allButton = document.createElement('button');
+            allButton.type = 'button';
+            allButton.className = `armor-passive-option ${armorPassiveFilter ? '' : 'selected'}`;
+            allButton.textContent = '전체 패시브';
+            allButton.tabIndex = -1;
+            allButton.addEventListener('click', () => setArmorPassiveFilter(''));
+            dropdown.appendChild(allButton);
+
+            const passives = (dbData?.['방어구']?.['패시브'] || [])
+                .slice()
+                .sort((left, right) => String(left.Name || '').localeCompare(String(right.Name || ''), 'ko'));
+            passives.forEach(passive => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = `armor-passive-option ${armorPassiveFilter === passive.Name ? 'selected' : ''}`;
+                button.tabIndex = -1;
+
+                const icon = document.createElement('img');
+                icon.src = `https://hd2.local/images/passives/${passive.Name}.png`;
+                icon.alt = '';
+                icon.onerror = () => setImageFallback(icon, 48, 48);
+                const label = document.createElement('span');
+                label.textContent = passive.Name;
+                button.append(icon, label);
+                attachItemHoverTooltip(button, passive.Name, passive.Desc || '상세 효과 데이터가 없습니다.');
+                button.addEventListener('click', () => setArmorPassiveFilter(passive.Name));
+                dropdown.appendChild(button);
+            });
+        }
+
+        function setArmorSortMode(mode) {
+            const dropdown = document.getElementById('armor-passive-dropdown');
+            if (mode === 'passive' && armorSortMode === 'passive') {
+                dropdown?.classList.toggle('open');
+                return;
+            }
+
+            armorSortMode = mode;
+            dropdown?.classList.remove('open');
+            openModal('방어구', null, { preserveScroll: true, preserveArmorState: true });
+        }
+
+        function setArmorPassiveFilter(passiveName) {
+            armorPassiveFilter = passiveName;
+            armorSortMode = 'passive';
+            hideItemHoverTooltip();
+            openModal('방어구', null, { preserveScroll: true, preserveArmorState: true });
         }
 
         function flattenDatabaseType(type) {
@@ -4673,6 +4990,13 @@
             document.getElementById('modal-search-clear').style.display = 'none';
             document.getElementById('no-result-message').style.display = 'none';
             slotSelector.style.display = 'none';
+            document.getElementById('armor-modal-controls').style.display = 'none';
+            document.getElementById('armor-passive-dropdown').classList.remove('open');
+
+            if (type === '방어구' && !useLegacyEquipmentLayout && !options.preserveArmorState) {
+                armorSortMode = 'rating';
+                armorPassiveFilter = '';
+            }
 
             const dynamicContainer = document.getElementById('modal-dynamic-content');
             dynamicContainer.innerHTML = '';
@@ -4758,19 +5082,25 @@
                 else if (type === '투척 무기') { targetId = 'selected-grenade'; ratioClass = 'img-ratio-grenade'; svgW = 480; svgH = 480; }
 
                 const currentEquippedName = document.getElementById(targetId) ? (document.getElementById(targetId).dataset.itemName || null) : null;
+                if (type === '방어구' && !useLegacyEquipmentLayout) renderArmorControls();
 
-                Object.keys(dbData[type]).forEach(category => {
-                    if (isHiddenDatabaseCategory(type, category)) return;
+                // 기존 레이아웃은 방어구도 원래 카테고리별 목록으로 보여주고, 새 레이아웃에서만 정렬/필터를 적용한다.
+                const modalGroups = type === '방어구' && !useLegacyEquipmentLayout
+                    ? [['방어구', getArmorItemsForModal()]]
+                    : Object.keys(dbData[type])
+                        .filter(category => !isHiddenDatabaseCategory(type, category))
+                        .map(category => [category, dbData[type][category]]);
 
-                    const groupData = dbData[type][category];
-                    if (!groupData || groupData.length === 0) return;
+                modalGroups.forEach(([category, groupData]) => {
+                    if (!Array.isArray(groupData) || groupData.length === 0) return;
 
                     const groupWrap = document.createElement('div');
                     groupWrap.className = 'category-group';
                     groupWrap.innerHTML = `<div class="category-title">${category}</div>`;
 
                     const listContainerLayout = document.createElement('div');
-                    listContainerLayout.className = 'item-list-layout';
+                    const useGridLayout = !useLegacyEquipmentLayout && ['주 무기', '보조 무기', '투척 무기'].includes(type);
+                    listContainerLayout.className = useGridLayout ? getEquipmentGridLayoutClass(type) : 'item-list-layout';
 
                     groupData.forEach(item => {
                         if (excludedItems.has(item.Name)) return;
@@ -4803,17 +5133,23 @@
                         card.setAttribute('data-raw-name', item.Name);
                         card.setAttribute('data-rule-disabled', 'false');
                         card.setAttribute('tabindex', '-1');
-                        card.innerHTML = `
-                                                                    <img class="${ratioClass}" src="${imgUrl}" onerror="setImageFallback(this, ${svgW}, ${svgH})" />
-                                                                    <div class="info-area">
-                                                                        <div class="name">${item.Name}</div>
-                                                                        <div class="desc">${description}</div>
-                                                                    ${passiveHtml}
-                                                                    </div>
-                                                                `;
+                        card.innerHTML = useGridLayout
+                            ? `
+                                <img class="${ratioClass}" src="${imgUrl}" onerror="setImageFallback(this, ${svgW}, ${svgH})" />
+                                <div class="name">${item.Name}</div>
+                            `
+                            : `
+                                <img class="${ratioClass}" src="${imgUrl}" onerror="setImageFallback(this, ${svgW}, ${svgH})" />
+                                <div class="info-area">
+                                    <div class="name">${item.Name}</div>
+                                    <div class="desc">${description}</div>
+                                    ${passiveHtml}
+                                </div>
+                            `;
                         if (!imgUrl) setImageFallback(card.querySelector('img'), svgW, svgH);
                         card.addEventListener('contextmenu', (e) => toggleExcludedItem(e, item.Name, type));
                         card.addEventListener('click', () => selectItem(item.Name, imgUrl));
+                        if (useGridLayout) attachItemHoverTooltip(card, item.Name, description);
 
                         listContainerLayout.appendChild(card);
                     });
@@ -4891,7 +5227,10 @@
         });
 
         function closeModal(e) {
-            if (e.target.id === 'item-modal') document.getElementById('item-modal').style.display = 'none';
+            if (e.target.id === 'item-modal') {
+                hideItemHoverTooltip();
+                document.getElementById('item-modal').style.display = 'none';
+            }
         }
 
         async function selectItem(name, imgUrl) {

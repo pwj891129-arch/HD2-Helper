@@ -3092,8 +3092,11 @@ namespace HD2_Helper
             if (e.IsDown && vkCode == (uint)Keys.Escape && !e.IsInjected && TryCancelAutoSelection())
                 return;
 
-            if (_isWaitingForKey && IsSettingsKeyCaptureAllowed() && e.IsDown)
+            if (_isWaitingForKey && e.IsDown && !e.IsInjected)
             {
+                // F3 편집창은 게임 포커스를 유지하는 비활성 오버레이라 ActiveForm 검사에만 의존하면
+                // 설정 대기 중에도 키가 전달되지 않는다. 사용자가 설정 행을 눌러 시작한 대기 상태에서는
+                // 프로그램이 주입한 키를 제외한 실제 입력을 포커스와 관계없이 바로 할당한다.
                 AssignCapturedSettingsKey(vkCode);
                 return;
             }

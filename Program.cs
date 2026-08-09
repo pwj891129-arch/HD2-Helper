@@ -1400,6 +1400,9 @@ namespace HD2_Helper
                 type = "CURRENT_LOADOUT_SYNC",
                 loadout = new
                 {
+                    // 실행 중 편집값이 있을 때만 WebView의 마지막 프리셋 복원을 건너뛴다.
+                    hasRuntimeLoadout = _currentSlots.Any(value => !string.IsNullOrWhiteSpace(value))
+                        || _currentLoadoutSlots.Any(value => !string.IsNullOrWhiteSpace(value)),
                     stratagems = _currentSlots.Select(value => value ?? "").ToArray(),
                     overlaySlots = _overlaySlotVisibility.ToArray(),
                     armor = _currentLoadoutSlots.ElementAtOrDefault(0) ?? "",

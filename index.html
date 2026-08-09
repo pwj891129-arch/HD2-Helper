@@ -2025,6 +2025,9 @@
         // 자동저장이 꺼져도 두 창의 현재 편집 화면은 동기화하되, 디스크 저장만 이 값으로 제어한다.
         let presetAutoSaveEnabled = false;
         let pendingPresetAutoSaveTimer = 0;
+        // SETTINGS_LOADED는 설정 변경 때마다 다시 오므로, 최초 복원 이후에는 현재 편집 상태를 되돌리지 않는다.
+        let initialSelectionStateReceived = false;
+        let currentLoadoutSyncReceived = false;
         let pendingSelectedPresetId = '';
         let pendingSelectedEquipmentPresetId = '';
         let editingPresetId = '';
@@ -2738,10 +2741,14 @@
 
         function renderSettings(data) {
             currentWaitingKeyTarget = data.waitingTarget || null;
-            pendingSelectedPresetId = typeof data.selectedPresetId === 'string' ? data.selectedPresetId : pendingSelectedPresetId;
-            pendingSelectedEquipmentPresetId = typeof data.selectedEquipmentPresetId === 'string'
-                ? data.selectedEquipmentPresetId
-                : pendingSelectedEquipmentPresetId;
+            if (!initialSelectionStateReceived) {
+                // 시작 시점의 마지막 탭만 복원 대상으로 사용한다. 이후 설정 메시지는 선택을 되돌리지 않는다.
+                pendingSelectedPresetId = typeof data.selectedPresetId === 'string' ? data.selectedPresetId : pendingSelectedPresetId;
+                pendingSelectedEquipmentPresetId = typeof data.selectedEquipmentPresetId === 'string'
+                    ? data.selectedEquipmentPresetId
+                    : pendingSelectedEquipmentPresetId;
+                initialSelectionStateReceived = true;
+            }
 
             currentInputDelay = data.inputDelay ?? 30;
             updateInputDelayLabel(currentInputDelay);
@@ -2892,6 +2899,8 @@
                     selectEquipmentPresetFromApp(data.id);
                 } else if (data.type === 'CURRENT_LOADOUT_SYNC' && data.loadout) {
                     // 원본 창과 F3 편집창은 저장 여부와 무관하게 현재 편집 중인 로드아웃을 같은 모습으로 유지한다.
+                    // 프로그램 시작 직후의 빈 런타임 상태는 마지막 프리셋 복원을 막지 않는다.
+                    currentLoadoutSyncReceived = data.loadout.hasRuntimeLoadout === true;
                     applyCurrentLoadoutFromApp(data.loadout);
                 } else if (data.type === 'SETTINGS_LOADED') {
                     renderSettings(data);
@@ -3975,12 +3984,12 @@
             return linkedId ? equipmentPresets.find(item => item.id === linkedId) || null : null;
         }
 
-        function applyLinkedEquipmentPreset(preset, saveSelection = false) {
+        function applyLinkedEquipmentPreset(preset, saveSelection = false, shouldSync = true) {
             const equipmentPreset = getLinkedEquipmentPreset(preset);
             if (!equipmentPreset) return false;
 
             selectedEquipmentPresetId = equipmentPreset.id;
-            applyEquipmentPresetLoadout(equipmentPreset.loadout);
+            applyEquipmentPresetLoadout(equipmentPreset.loadout, shouldSync);
             renderEquipmentPresetTabs();
             if (saveSelection) saveSelectedEquipmentPresetId();
             return true;
@@ -3990,9 +3999,9 @@
             const stratagemPreset = presets.find(item => item.id === selectedPresetId);
             if (!stratagemPreset || !presetAutoSaveEnabled) return;
 
-            // 자동저장 ON에서만 연결 ID를 프리셋 객체와 디스크에 함께 기록한다. OFF에서는 수동 저장 시점에만 반영된다.
+            // 자동저장 ON에서만 연결 ID를 기록 대상으로 잡는다. 실제 파일 저장은 완성된 현재 상태를 동기화한 뒤 한 번만 수행한다.
             stratagemPreset.equipmentPresetId = selectedEquipmentPresetId || '';
-            saveActivePresetState();
+            queueActivePresetAutoSave();
         }
 
         async function applyCurrentLoadoutFromApp(loadout) {
@@ -4304,6 +4313,20 @@
             if (!presetsLoaded || !equipmentPresetsLoaded || !imageCacheReady) return;
 
             const preset = pendingSelectedPresetId ? presets.find(item => item.id === pendingSelectedPresetId) : null;
+            if (currentLoadoutSyncReceived) {
+                // C#이 이미 현재 편집 상태를 보냈다면, 저장된 프리셋 내용으로 덮어쓰지 않고 선택 탭만 복원한다.
+                if (preset) selectedPresetId = preset.id;
+
+                const equipmentId = pendingSelectedEquipmentPresetId || getLinkedEquipmentPreset(preset)?.id || '';
+                const equipmentPreset = equipmentPresets.find(item => item.id === equipmentId);
+                if (equipmentPreset) selectedEquipmentPresetId = equipmentPreset.id;
+
+                pendingSelectedPresetId = '';
+                pendingSelectedEquipmentPresetId = '';
+                renderPresetTabs();
+                renderEquipmentPresetTabs();
+                return;
+            }
             if (!pendingSelectedPresetId) {
                 const equipmentPreset = equipmentPresets.find(item => item.id === pendingSelectedEquipmentPresetId);
                 if (!equipmentPreset) {
@@ -4325,16 +4348,16 @@
 
             if (selectedPresetId === preset.id) {
                 pendingSelectedPresetId = '';
-                if (!applyLinkedEquipmentPreset(preset)) applyPendingEquipmentPreset();
+                if (!applyLinkedEquipmentPreset(preset, false, false)) applyPendingEquipmentPreset();
                 return;
             }
 
             selectedPresetId = preset.id;
             pendingSelectedPresetId = '';
-            applyStratagemPresetLoadout(preset.loadout);
+            applyStratagemPresetLoadout(preset.loadout, preset.overlaySlots, false);
             applyPresetSupportWeaponSettings(preset.supportWeapon);
             renderPresetTabs();
-            if (!applyLinkedEquipmentPreset(preset)) applyPendingEquipmentPreset();
+            if (!applyLinkedEquipmentPreset(preset, false, false)) applyPendingEquipmentPreset();
         }
 
         function applyPendingEquipmentPreset() {
@@ -4344,7 +4367,7 @@
                 if (pendingSelectedEquipmentPresetId) saveSelectedEquipmentPresetId('');
             } else if (selectedEquipmentPresetId !== equipmentPreset.id) {
                 selectedEquipmentPresetId = equipmentPreset.id;
-                applyEquipmentPresetLoadout(equipmentPreset.loadout);
+                applyEquipmentPresetLoadout(equipmentPreset.loadout, false);
             }
             pendingSelectedEquipmentPresetId = '';
             renderEquipmentPresetTabs();
@@ -4762,7 +4785,7 @@
             saveSelectedPresetId();
         }
 
-        function selectPreset(e, id) {
+        async function selectPreset(e, id) {
             if (suppressPresetClick) {
                 e?.preventDefault();
                 e?.stopPropagation();
@@ -4779,11 +4802,13 @@
             }
 
             selectedPresetId = id;
-            applyStratagemPresetLoadout(preset.loadout);
-            applyPresetSupportWeaponSettings(preset.supportWeapon);
-            applyLinkedEquipmentPreset(preset, true);
-            renderPresetTabs();
+            // 선택 ID를 먼저 앱에 알린 뒤, 스트라타젬/장비를 묶어서 적용한다. 중간 상태는 다른 창에 보내지 않는다.
             saveSelectedPresetId();
+            await applyStratagemPresetLoadout(preset.loadout, preset.overlaySlots, false);
+            applyPresetSupportWeaponSettings(preset.supportWeapon);
+            applyLinkedEquipmentPreset(preset, true, false);
+            renderPresetTabs();
+            syncCurrentLoadoutToApp();
 
             requestAnimationFrame(() => {
                 const container = document.getElementById('preset-tabs-bar');
@@ -4811,17 +4836,17 @@
             });
         }
 
-        function selectPresetFromApp(id) {
+        async function selectPresetFromApp(id) {
             const preset = presets.find(item => item.id === id);
             if (!preset) return;
 
             if (selectedPresetId === id) return;
 
-            // 앱에서 다시 전달된 선택 동기화는 이미 C# 쪽 저장을 거친 상태라 재저장 메시지를 보내지 않는다.
+            // 앱에서 전달된 선택은 원본 창의 완성된 CURRENT_LOADOUT_SYNC가 뒤이어 오므로 여기서는 다시 전송하지 않는다.
             selectedPresetId = id;
-            applyStratagemPresetLoadout(preset.loadout);
+            await applyStratagemPresetLoadout(preset.loadout, preset.overlaySlots, false);
             applyPresetSupportWeaponSettings(preset.supportWeapon);
-            applyLinkedEquipmentPreset(preset);
+            applyLinkedEquipmentPreset(preset, false, false);
             renderPresetTabs();
         }
 
@@ -5040,20 +5065,22 @@
             }
         }
 
-        function selectEquipmentPreset(id, saveSelection) {
+        async function selectEquipmentPreset(id, saveSelection, shouldSync = true) {
             const preset = equipmentPresets.find(item => item.id === id);
             if (!preset || selectedEquipmentPresetId === id) return;
             selectedEquipmentPresetId = id;
-            applyEquipmentPresetLoadout(preset.loadout);
-            renderEquipmentPresetTabs();
             if (saveSelection) {
                 saveSelectedEquipmentPresetId();
-                linkSelectedEquipmentPresetToCurrentStratagem();
             }
+            // 장비 선택은 현재 스트라타젬 상태와 합친 뒤 단 한 번만 다른 창으로 동기화한다.
+            await applyEquipmentPresetLoadout(preset.loadout, false);
+            renderEquipmentPresetTabs();
+            if (saveSelection) linkSelectedEquipmentPresetToCurrentStratagem();
+            if (shouldSync) syncCurrentLoadoutToApp();
         }
 
         function selectEquipmentPresetFromApp(id) {
-            selectEquipmentPreset(id, false);
+            selectEquipmentPreset(id, false, false);
         }
 
         function requestDeleteEquipmentPreset(id) {

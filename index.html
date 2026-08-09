@@ -42,6 +42,7 @@
             --left-width: 640px;
             --slot-size: 120px;
             --slots-height: 250px;
+            --stratagem-slot-rows: 2;
             --loadout-height: 250px;
             --weapon-row-height: 120px;
             --armor-size: 250px;
@@ -218,7 +219,7 @@
         .stratagem-slots-container {
             display: grid;
             grid-template-columns: repeat(5, var(--slot-size));
-            grid-template-rows: repeat(2, var(--slot-size));
+            grid-template-rows: repeat(var(--stratagem-slot-rows), var(--slot-size));
             gap: var(--design-gap);
             min-height: 0;
         }
@@ -1121,6 +1122,16 @@
             gap: var(--space-md);
         }
 
+        .setting-number-control {
+            width: 100%;
+            min-width: 0;
+            box-sizing: border-box;
+            border: 1px solid var(--hd-border);
+            background: var(--hd-dark-box);
+            color: var(--hd-text);
+            padding: 4px 6px;
+        }
+
         .equipment-grid-layout {
             align-items: stretch;
         }
@@ -1667,6 +1678,10 @@
                         <input id="setting-stratagem-reselect-enabled" type="checkbox" onchange="toggleStratagemReselectEnabled(this.checked)">
                     </label>
                     <label class="crosshair-row">
+                        <span class="setting-label">여분 슬롯 추가</span>
+                        <input id="setting-additional-stratagem-slots" class="setting-number-control" type="number" min="0" max="20" step="1" inputmode="numeric" onchange="updateAdditionalStratagemSlots(this.value)" onblur="updateAdditionalStratagemSlots(this.value)">
+                    </label>
+                    <label class="crosshair-row">
                         <span class="setting-label">이전 레이아웃 사용</span>
                         <input id="setting-legacy-equipment-layout" type="checkbox" onchange="toggleLegacyEquipmentLayout(this.checked)">
                     </label>
@@ -2021,6 +2036,11 @@
         let suppressPresetClickTimer = 0;
         let currentWaitingKeyTarget = null;
         let currentInputDelay = 30;
+        const baseStratagemSlotCount = 10;
+        const maxAdditionalStratagemSlots = 20;
+        const stratagemSlotsPerRow = 5;
+        const stratagemSlotRowHeight = 130;
+        let additionalStratagemSlots = 0;
         let pendingInputDelayTimer = 0;
         let pendingCrosshairSettingsTimer = 0;
         let currentCrosshairSettings = null;
@@ -2240,6 +2260,30 @@
         function updateInputDelayLabel(value) {
             const delayButton = document.getElementById('setting-input-delay');
             if (delayButton) delayButton.textContent = `${value}ms`;
+        }
+
+        function getStratagemSlotCount() {
+            return baseStratagemSlotCount + additionalStratagemSlots;
+        }
+
+        function getStratagemSlotRowCount() {
+            return Math.ceil(getStratagemSlotCount() / stratagemSlotsPerRow);
+        }
+
+        function updateAdditionalStratagemSlots(value) {
+            const input = document.getElementById('setting-additional-stratagem-slots');
+            const parsed = Number(value);
+            if (!Number.isFinite(parsed)) {
+                if (input) input.value = String(additionalStratagemSlots);
+                return;
+            }
+
+            const normalized = Math.max(0, Math.min(maxAdditionalStratagemSlots, Math.trunc(parsed)));
+            additionalStratagemSlots = normalized;
+            if (input) input.value = String(normalized);
+            // 슬롯 수 변경은 즉시 화면에 반영하고, 앱에는 저장 가능한 정수만 전달한다.
+            applyStratagemSlotLayout();
+            postAppMessage({ type: 'SET_ADDITIONAL_STRATAGEM_SLOTS', value: normalized });
         }
 
         function toggleTestMode(enabled) {
@@ -2687,6 +2731,10 @@
 
             currentInputDelay = data.inputDelay ?? 30;
             updateInputDelayLabel(currentInputDelay);
+            additionalStratagemSlots = Math.max(0, Math.min(maxAdditionalStratagemSlots, Math.trunc(Number(data.additionalStratagemSlots) || 0)));
+            const additionalSlotsControl = document.getElementById('setting-additional-stratagem-slots');
+            if (additionalSlotsControl) additionalSlotsControl.value = String(additionalStratagemSlots);
+            applyStratagemSlotLayout();
             stratagemCompactLayout = data.stratagemCompactLayout === true;
             useLegacyEquipmentLayout = data.useLegacyEquipmentLayout === true;
             stratagemReselectEnabled = data.stratagemReselectEnabled !== false;
@@ -2752,7 +2800,7 @@
             if (!container) return;
 
             container.innerHTML = '';
-            for (let slot = 1; slot <= 10; slot++) {
+            for (let slot = 1; slot <= getStratagemSlotCount(); slot++) {
                 const target = `slot${slot}`;
                 const slotLabel = String(slot).padStart(2, '0');
                 const info = slots.find(item => item?.slot === slot);
@@ -2862,7 +2910,6 @@
         }, true);
 
         const slotsContainer = document.getElementById('slots-container');
-        const fragment = document.createDocumentFragment();
 
         function setImageFallback(img, width = 100, height = 100) {
             img.onerror = null;
@@ -2889,8 +2936,8 @@
         }
 
         function getDefaultOverlaySlotVisibility() {
-            // 기본 휠 구성은 첫 줄(1~5)만 표시하고 두 번째 줄(6~10)은 숨긴다.
-            return Array.from({ length: 10 }, (_, index) => index < 5);
+            // 기본 휠 구성은 첫 줄(1~5)만 표시하고, 기본 6~10번과 추가 보관 슬롯은 모두 숨긴다.
+            return Array.from({ length: getStratagemSlotCount() }, (_, index) => index < 5);
         }
 
         function normalizeOverlaySlotVisibility(source) {
@@ -2986,7 +3033,7 @@
         function canSwapStratagemSlots(draggedIndex, draggedName, targetIndex, targetName) {
             // 드래그 뒤에도 동일한 엑소슈트가 두 슬롯에 남지 않도록 전체 슬롯을 검사한다.
             const exosuitNames = new Set();
-            for (let index = 1; index <= 10; index++) {
+            for (let index = 1; index <= getStratagemSlotCount(); index++) {
                 let name = document.getElementById(`slot-${index}`)?.dataset.itemName || '';
                 if (index === draggedIndex) name = targetName;
                 else if (index === targetIndex) name = draggedName;
@@ -3491,25 +3538,48 @@
             document.getElementById('modal-item-list').scrollTop = 0;
         }
 
-        for (let i = 1; i <= 10; i++) {
+        function createStratagemSlot(index) {
             const slot = document.createElement('div');
             slot.className = 'slot';
-            slot.id = `slot-${i}`;
+            slot.id = `slot-${index}`;
             slot.setAttribute('draggable', 'true');
             slot.setAttribute('tabindex', '-1');
-            renderStratagemSlot(slot, i);
+            renderStratagemSlot(slot, index);
 
-            slot.addEventListener('click', (event) => handleStratagemSlotClick(event, i));
-            slot.addEventListener('contextmenu', (e) => clearStratagemSlot(e, i));
+            slot.addEventListener('click', (event) => handleStratagemSlotClick(event, index));
+            slot.addEventListener('contextmenu', (e) => clearStratagemSlot(e, index));
 
             slot.addEventListener('dragstart', handleDragStart);
             slot.addEventListener('dragend', handleDragEnd);
             slot.addEventListener('dragover', handleDragOver);
             slot.addEventListener('drop', handleDrop);
 
-            fragment.appendChild(slot);
+            return slot;
         }
-        slotsContainer.appendChild(fragment);
+
+        function applyStratagemSlotLayout() {
+            const container = document.getElementById('slots-container');
+            if (!container) return;
+
+            const slotCount = getStratagemSlotCount();
+            const slotRows = getStratagemSlotRowCount();
+            const extraRows = Math.max(0, slotRows - 2);
+            // CSS 작업 영역과 WinForms 기준 높이는 같은 130px 행 단위를 사용해 슬롯과 창이 함께 늘어난다.
+            document.documentElement.style.setProperty('--stratagem-slot-rows', String(slotRows));
+            document.documentElement.style.setProperty('--slots-height', `${250 + (extraRows * stratagemSlotRowHeight)}px`);
+            document.documentElement.style.setProperty('--design-height', `${590 + (extraRows * stratagemSlotRowHeight)}px`);
+            document.documentElement.style.setProperty('--stage-height', `${630 + (extraRows * stratagemSlotRowHeight)}px`);
+
+            while (container.children.length > slotCount)
+                container.lastElementChild?.remove();
+
+            const fragment = document.createDocumentFragment();
+            for (let index = container.children.length + 1; index <= slotCount; index++)
+                fragment.appendChild(createStratagemSlot(index));
+            container.appendChild(fragment);
+        }
+
+        applyStratagemSlotLayout();
 
         function handleDragStart(e) {
             if (!this.dataset.itemName) {
@@ -3680,7 +3750,7 @@
         }
 
         function clearEquippedItem(name) {
-            for (let i = 1; i <= 10; i++) {
+            for (let i = 1; i <= getStratagemSlotCount(); i++) {
                 const slot = document.getElementById(`slot-${i}`);
                 if (slot?.dataset.itemName === name) renderStratagemSlot(slot, i);
             }
@@ -3694,7 +3764,7 @@
 
         function clearStratagemLoadout(shouldSync = true) {
             const overlaySlots = getSelectedPresetOverlayVisibility();
-            for (let i = 1; i <= 10; i++) {
+            for (let i = 1; i <= getStratagemSlotCount(); i++) {
                 renderStratagemSlot(document.getElementById(`slot-${i}`), i, '', '', overlaySlots?.[i - 1] ?? null);
             }
 
@@ -3800,7 +3870,7 @@
 
         function normalizeStratagemLoadout(loadout = {}) {
             return {
-                stratagems: Array.from({ length: 10 }, (_, index) => {
+                stratagems: Array.from({ length: getStratagemSlotCount() }, (_, index) => {
                     const value = Array.isArray(loadout.stratagems) ? loadout.stratagems[index] : '';
                     return typeof value === 'string' ? value : '';
                 })
@@ -3825,10 +3895,10 @@
 
         function getCurrentLoadout() {
             return {
-                stratagems: Array.from({ length: 10 }, (_, index) => {
+                stratagems: Array.from({ length: getStratagemSlotCount() }, (_, index) => {
                     return document.getElementById(`slot-${index + 1}`)?.dataset.itemName || '';
                 }),
-                overlaySlots: Array.from({ length: 10 }, (_, index) => {
+                overlaySlots: Array.from({ length: getStratagemSlotCount() }, (_, index) => {
                     return document.getElementById(`slot-${index + 1}`)?.dataset.overlayVisible === 'true';
                 }),
                 armor: document.getElementById('selected-armor')?.dataset.itemName || '',
@@ -4997,7 +5067,7 @@
             const selectedLoadoutImageUrls = selectedLoadoutItems
                 .map(({ type, item }) => getCachedDisplayImageUrl(type, item.Name));
 
-            for (let index = 0; index < 10; index++) {
+            for (let index = 0; index < getStratagemSlotCount(); index++) {
                 const item = selectedStratagems[index];
                 renderStratagemSlot(
                     document.getElementById(`slot-${index + 1}`),
@@ -5051,7 +5121,7 @@
                 selector.scrollLeft += event.deltaY;
             };
 
-            for (let index = 1; index <= 10; index++) {
+            for (let index = 1; index <= getStratagemSlotCount(); index++) {
                 const slot = document.getElementById(`slot-${index}`);
                 const slotName = slot?.dataset.itemName || '';
                 const slotImage = slot?.querySelector(':scope > img')?.getAttribute('src') || '';
@@ -5356,7 +5426,7 @@
                 renderStratagemSlot(slot, currentTargetSlot.index, name, imgUrl);
                 syncCurrentLoadoutToApp();
 
-                if (currentTargetSlot.index < 10) {
+                if (currentTargetSlot.index < getStratagemSlotCount()) {
                     await openModal('스트라타젬', currentTargetSlot.index + 1, { preserveScroll: true, smoothSlotScroll: true });
                 } else {
                     document.getElementById('item-modal').style.display = 'none';

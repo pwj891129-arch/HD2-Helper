@@ -162,6 +162,11 @@ namespace HD2_Helper
         private const int ExpandedSettingsClientWidth = 1060;
         // 장비 프리셋 탭 행을 추가했으므로 편집창과 원본 창의 기준 높이도 함께 늘린다.
         private const int BaseClientHeight = 630;
+        // 기본 10칸 뒤의 보관용 슬롯은 한 줄에 5칸씩 늘어나며, 지나치게 큰 편집창을 막기 위해 20칸까지 허용한다.
+        private const int BaseStratagemSlotCount = 10;
+        private const int MaxAdditionalStratagemSlots = 20;
+        private const int StratagemSlotsPerRow = 5;
+        private const int StratagemSlotRowHeight = 130;
         private const int BaseReferenceWidth = 1920;
         private const int BaseReferenceHeight = 1080;
         private const double MinClientScale = 0.5;
@@ -173,9 +178,14 @@ namespace HD2_Helper
         private static Dictionary<string, Image?> _imageCache = new();
         private static Dictionary<string, string[]> _sequenceMap = new();
 
-        private static string?[] _currentSlots = new string?[10];
+        private static int _additionalStratagemSlots;
+        private static int StratagemSlotCount => BaseStratagemSlotCount + _additionalStratagemSlots;
+        private static int AdditionalStratagemSlotRows => (int)Math.Ceiling(StratagemSlotCount / (double)StratagemSlotsPerRow) - (BaseStratagemSlotCount / StratagemSlotsPerRow);
+        private static int CurrentBaseClientHeight => BaseClientHeight + (AdditionalStratagemSlotRows * StratagemSlotRowHeight);
+
+        private static string?[] _currentSlots = new string?[BaseStratagemSlotCount];
         private static string?[] _currentLoadoutSlots = new string?[4];
-        private static string?[] _previousStratagemSlots = new string?[10];
+        private static string?[] _previousStratagemSlots = new string?[BaseStratagemSlotCount];
         // 오버레이 휠에서 보이는 슬롯만 제어하며 자동선택용 _currentSlots 순서는 유지한다.
         private static bool[] _overlaySlotVisibility = CreateDefaultOverlaySlotVisibility();
         private static HashSet<string> _disabledItems = new();
@@ -374,7 +384,7 @@ namespace HD2_Helper
             MaximizeBox = false;
             BackColor = Color.FromArgb(0x22, 0x22, 0x22);
             ClientSize = GetInitialClientSize();
-            MinimumSize = SizeFromClientSize(new Size((int)Math.Round(BaseClientWidth * MinClientScale), (int)Math.Round(BaseClientHeight * MinClientScale)));
+            MinimumSize = SizeFromClientSize(new Size((int)Math.Round(BaseClientWidth * MinClientScale), (int)Math.Round(CurrentBaseClientHeight * MinClientScale)));
             Resize += (_, _) => KeepClientAspectRatio();
 
             StartPosition = FormStartPosition.Manual;
@@ -431,7 +441,7 @@ namespace HD2_Helper
             scale = Math.Max(scale, MinClientScale);
             return new Size(
                 (int)Math.Round(BaseClientWidth * scale),
-                (int)Math.Round(BaseClientHeight * scale)
+                (int)Math.Round(CurrentBaseClientHeight * scale)
             );
         }
 
@@ -444,8 +454,8 @@ namespace HD2_Helper
             if (width <= 0 || height <= 0) return;
 
             int minWidth = (int)Math.Round(_layoutClientWidth * MinClientScale);
-            int minHeight = (int)Math.Round(BaseClientHeight * MinClientScale);
-            double targetRatio = (double)_layoutClientWidth / BaseClientHeight;
+            int minHeight = (int)Math.Round(CurrentBaseClientHeight * MinClientScale);
+            double targetRatio = (double)_layoutClientWidth / CurrentBaseClientHeight;
             width = Math.Max(width, minWidth);
             height = Math.Max(height, minHeight);
             int targetHeight = (int)Math.Round(width / targetRatio);
@@ -486,17 +496,17 @@ namespace HD2_Helper
             }
 
             double scale = ClientSize.Height > 0
-                ? Math.Max(MinClientScale, (double)ClientSize.Height / BaseClientHeight)
+                ? Math.Max(MinClientScale, (double)ClientSize.Height / CurrentBaseClientHeight)
                 : 1.0;
             Size nextSize = new(
                 (int)Math.Round(targetBaseWidth * scale),
-                (int)Math.Round(BaseClientHeight * scale)
+                (int)Math.Round(CurrentBaseClientHeight * scale)
             );
 
             _layoutClientWidth = targetBaseWidth;
             MinimumSize = SizeFromClientSize(new Size(
                 (int)Math.Round(targetBaseWidth * MinClientScale),
-                (int)Math.Round(BaseClientHeight * MinClientScale)
+                (int)Math.Round(CurrentBaseClientHeight * MinClientScale)
             ));
 
             if (ClientSize == nextSize) return;
@@ -504,6 +514,44 @@ namespace HD2_Helper
             _isAdjustingClientSize = true;
             ApplyClientSizePreservingEmbeddedOrigin(nextSize);
             _isAdjustingClientSize = false;
+        }
+
+        private void ApplyScaledClientHeight()
+        {
+            if (WindowState != FormWindowState.Normal)
+                return;
+
+            // 슬롯 행을 추가해도 현재 창의 가로 배율은 유지하고 세로 길이만 새 기준 높이에 맞춘다.
+            double scale = ClientSize.Width > 0
+                ? Math.Max(MinClientScale, (double)ClientSize.Width / _layoutClientWidth)
+                : 1.0;
+            Size nextSize = new(
+                (int)Math.Round(_layoutClientWidth * scale),
+                (int)Math.Round(CurrentBaseClientHeight * scale)
+            );
+
+            MinimumSize = SizeFromClientSize(new Size(
+                (int)Math.Round(_layoutClientWidth * MinClientScale),
+                (int)Math.Round(CurrentBaseClientHeight * MinClientScale)
+            ));
+
+            if (ClientSize == nextSize) return;
+
+            _isAdjustingClientSize = true;
+            ApplyClientSizePreservingEmbeddedOrigin(nextSize);
+            _isAdjustingClientSize = false;
+        }
+
+        private void AdjustStratagemSlotClientHeight(WebView2? sourceWebView)
+        {
+            if (ReferenceEquals(sourceWebView, _webView))
+            {
+                ApplyScaledClientHeight();
+                return;
+            }
+
+            if (sourceWebView?.FindForm() is HelperEditorWindow editorWindow)
+                editorWindow.ApplyStratagemSlotClientHeight();
         }
 
         private void ApplyClientSizePreservingEmbeddedOrigin(Size nextClientSize)
@@ -524,6 +572,8 @@ namespace HD2_Helper
             LoadDatabase();
             LoadUserSetting();
             LoadSetting();
+            // 저장된 여분 슬롯 수는 창이 만들어진 뒤 읽히므로, 시작할 때도 슬롯 행 수에 맞춰 높이를 보정한다.
+            ApplyScaledClientHeight();
             LoadCrosshairSettings();
             LoadSupportWeaponSettings();
             _supportWeaponMode = _supportWeaponSettings.Normalized().Mode;
@@ -1028,6 +1078,23 @@ namespace HD2_Helper
                         SendSettingsToWeb();
                     }
                 }
+                else if (type == "SET_ADDITIONAL_STRATAGEM_SLOTS")
+                {
+                    if (doc.RootElement.TryGetProperty("value", out var valueElement) && valueElement.TryGetInt32(out int value))
+                    {
+                        int normalizedValue = Math.Clamp(value, 0, MaxAdditionalStratagemSlots);
+                        if (_additionalStratagemSlots != normalizedValue)
+                        {
+                            // UI, 프리셋, 휠 모두 같은 슬롯 수를 쓰도록 상태 배열을 먼저 확장하거나 축소한다.
+                            _additionalStratagemSlots = normalizedValue;
+                            ResizeStratagemSlotState();
+                            AdjustStratagemSlotClientHeight(sourceWebView);
+                            SaveSetting();
+                        }
+
+                        SendSettingsToWeb();
+                    }
+                }
                 else if (type == "START_KEY_CAPTURE")
                 {
                     if (doc.RootElement.TryGetProperty("target", out var targetElement))
@@ -1271,7 +1338,7 @@ namespace HD2_Helper
             if (!root.TryGetProperty("loadout", out var loadoutElement) || loadoutElement.ValueKind != JsonValueKind.Object)
                 return;
 
-            var slots = new string?[10];
+            var slots = new string?[StratagemSlotCount];
             if (loadoutElement.TryGetProperty("stratagems", out var stratagemsElement) && stratagemsElement.ValueKind == JsonValueKind.Array)
             {
                 int index = 0;
@@ -1322,8 +1389,29 @@ namespace HD2_Helper
 
         private static bool[] CreateDefaultOverlaySlotVisibility()
         {
-            // 기본 휠은 첫 줄의 1~5번만 표시한다.
-            return Enumerable.Range(0, 10).Select(index => index < 5).ToArray();
+            // 기본 휠은 첫 줄의 1~5번만 표시하며, 추가 보관 슬롯도 처음에는 숨긴다.
+            return Enumerable.Range(0, StratagemSlotCount).Select(index => index < 5).ToArray();
+        }
+
+        private static void ResizeStratagemSlotState()
+        {
+            int slotCount = StratagemSlotCount;
+            string?[] ResizeNames(string?[] source) => Enumerable.Range(0, slotCount)
+                .Select(index => index < source.Length ? source[index] : null)
+                .ToArray();
+
+            // 슬롯 수 변경은 기존 선택과 이전 선택 상태를 앞쪽부터 보존하고, 새 슬롯만 빈 값으로 만든다.
+            _currentSlots = ResizeNames(_currentSlots);
+            _previousStratagemSlots = ResizeNames(_previousStratagemSlots);
+
+            bool[] defaults = CreateDefaultOverlaySlotVisibility();
+            _overlaySlotVisibility = defaults
+                .Select((fallback, index) => index < _overlaySlotVisibility.Length ? _overlaySlotVisibility[index] : fallback)
+                .ToArray();
+
+            // 사라진 슬롯의 단축키는 다시 슬롯을 늘렸을 때 의도치 않게 되살아나지 않도록 정리한다.
+            foreach (int slotIndex in _slotKey.Keys.Where(index => index >= slotCount).ToList())
+                _slotKey.Remove(slotIndex);
         }
 
         private static bool[] ReadOverlaySlotVisibility(JsonElement element)
@@ -1563,6 +1651,11 @@ namespace HD2_Helper
                 {
                     if (int.TryParse(value, out int delay)) _inputDelay = Math.Clamp(delay, 30, 100);
                 }
+                else if (key.Equals("additionalStratagemSlots", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (int.TryParse(value, out int slotCount))
+                        _additionalStratagemSlots = Math.Clamp(slotCount, 0, MaxAdditionalStratagemSlots);
+                }
                 else if (key.Equals("selectedPresetId", StringComparison.OrdinalIgnoreCase))
                 {
                     // 선택 프리셋은 숫자 키 설정과 달리 문자열 id라서 그대로 읽는다.
@@ -1684,13 +1777,16 @@ namespace HD2_Helper
                 else if (key.StartsWith("slot", StringComparison.OrdinalIgnoreCase)
                     && int.TryParse(key[4..], out int slot)
                     && slot >= 1
-                    && slot <= 10)
+                    && slot <= StratagemSlotCount)
                 {
                     if (!uint.TryParse(value, out uint vk)) continue;
                     if (vk == 0) _slotKey.Remove(slot - 1);
                     else _slotKey[slot - 1] = vk;
                 }
             }
+
+            // settings.ini에서 추가 슬롯 수를 읽은 뒤에만 배열 길이를 맞춰, 기존 프리셋 데이터가 잘리지 않게 한다.
+            ResizeStratagemSlotState();
         }
 
         private static void SaveSetting()
@@ -1700,6 +1796,7 @@ namespace HD2_Helper
             var lines = new List<string>
             {
                 $"inputDelay={Math.Clamp(_inputDelay, 30, 100)}",
+                $"additionalStratagemSlots={_additionalStratagemSlots}",
                 $"stratagemCompactLayout={(_stratagemCompactLayout ? 1 : 0)}",
                 $"useLegacyEquipmentLayout={(_useLegacyEquipmentLayout ? 1 : 0)}",
                 $"stratagemReselectEnabled={(_stratagemReselectEnabled ? 1 : 0)}",
@@ -1738,7 +1835,7 @@ namespace HD2_Helper
                 lines.Add($"ocr.{type}.border={normalized.BorderThickness}");
             }
 
-            for (int slot = 1; slot <= 10; slot++)
+            for (int slot = 1; slot <= StratagemSlotCount; slot++)
             {
                 lines.Add($"slot{slot}={(_slotKey.TryGetValue(slot - 1, out uint key) ? key : 0)}");
             }
@@ -1754,7 +1851,7 @@ namespace HD2_Helper
             return target.StartsWith("slot", StringComparison.OrdinalIgnoreCase)
                 && int.TryParse(target[4..], out int slot)
                 && slot >= 1
-                && slot <= 10;
+                && slot <= StratagemSlotCount;
         }
 
         private static bool TryGetManualStratagemDirection(string? settingKey, out string direction)
@@ -1808,7 +1905,7 @@ namespace HD2_Helper
             else if (target!.StartsWith("slot", StringComparison.OrdinalIgnoreCase)
                 && int.TryParse(target[4..], out int slot)
                 && slot >= 1
-                && slot <= 10)
+                && slot <= StratagemSlotCount)
             {
                 _slotKey.Remove(slot - 1);
             }
@@ -1884,7 +1981,7 @@ namespace HD2_Helper
             else if (target!.StartsWith("slot", StringComparison.OrdinalIgnoreCase)
                 && int.TryParse(target[4..], out int slot)
                 && slot >= 1
-                && slot <= 10)
+                && slot <= StratagemSlotCount)
             {
                 if (vkCode == 0) _slotKey.Remove(slot - 1);
                 else _slotKey[slot - 1] = vkCode;
@@ -1926,7 +2023,7 @@ namespace HD2_Helper
                 };
             }
 
-            var slotKeys = Enumerable.Range(1, 10)
+            var slotKeys = Enumerable.Range(1, StratagemSlotCount)
                 .Select(slot => new
                 {
                     slot,
@@ -1940,6 +2037,7 @@ namespace HD2_Helper
             {
                 type = "SETTINGS_LOADED",
                 inputDelay = Math.Clamp(_inputDelay, 30, 100),
+                additionalStratagemSlots = _additionalStratagemSlots,
                 stratagemCompactLayout = _stratagemCompactLayout,
                 useLegacyEquipmentLayout = _useLegacyEquipmentLayout,
                 stratagemReselectEnabled = _stratagemReselectEnabled,
@@ -3854,8 +3952,8 @@ namespace HD2_Helper
             // 프리셋 오버레이로 바꿀 때도 게임 안에는 직전 슬롯이 남아 있으므로 OCR 실패 시 보조 시작점으로 보관한다.
             _previousStratagemSlots = _currentSlots.ToArray();
             _currentSlots = preset.Loadout.Stratagems
-                .Concat(Enumerable.Repeat("", 10))
-                .Take(10)
+                .Concat(Enumerable.Repeat("", StratagemSlotCount))
+                .Take(StratagemSlotCount)
                 .Select(name => string.IsNullOrWhiteSpace(name) ? null : name)
                 .ToArray();
             _overlaySlotVisibility = preset.OverlaySlots.ToArray();
@@ -6431,7 +6529,8 @@ namespace HD2_Helper
 
             public static PresetLoadout FromJson(JsonElement loadoutElement)
             {
-                var stratagems = new string[10];
+                // 저장된 프리셋도 현재 설정한 기본+여분 슬롯 수에 맞춰 읽는다.
+                var stratagems = new string[StratagemSlotCount];
                 if (loadoutElement.ValueKind == JsonValueKind.Object
                     && loadoutElement.TryGetProperty("stratagems", out var stratagemsElement)
                     && stratagemsElement.ValueKind == JsonValueKind.Array)
@@ -6582,7 +6681,7 @@ namespace HD2_Helper
                 ShowInTaskbar = false;
                 BackColor = Color.FromArgb(0x22, 0x22, 0x22);
                 ClientSize = GetInitialClientSize();
-                MinimumSize = SizeFromClientSize(new Size((int)Math.Round(BaseClientWidth * MinClientScale), (int)Math.Round(BaseClientHeight * MinClientScale)));
+                MinimumSize = SizeFromClientSize(new Size((int)Math.Round(BaseClientWidth * MinClientScale), (int)Math.Round(CurrentBaseClientHeight * MinClientScale)));
                 StartPosition = FormStartPosition.CenterScreen;
                 Resize += (_, _) => KeepClientAspectRatio();
 
@@ -6853,8 +6952,8 @@ namespace HD2_Helper
                 if (width <= 0 || height <= 0) return;
 
                 int minWidth = (int)Math.Round(layoutClientWidth * MinClientScale);
-                int minHeight = (int)Math.Round(BaseClientHeight * MinClientScale);
-                double targetRatio = (double)layoutClientWidth / BaseClientHeight;
+                int minHeight = (int)Math.Round(CurrentBaseClientHeight * MinClientScale);
+                double targetRatio = (double)layoutClientWidth / CurrentBaseClientHeight;
                 width = Math.Max(width, minWidth);
                 height = Math.Max(height, minHeight);
                 int targetHeight = (int)Math.Round(width / targetRatio);
@@ -6881,17 +6980,43 @@ namespace HD2_Helper
                 }
 
                 double scale = ClientSize.Height > 0
-                    ? Math.Max(MinClientScale, (double)ClientSize.Height / BaseClientHeight)
+                    ? Math.Max(MinClientScale, (double)ClientSize.Height / CurrentBaseClientHeight)
                     : 1.0;
                 Size nextSize = new(
                     (int)Math.Round(targetBaseWidth * scale),
-                    (int)Math.Round(BaseClientHeight * scale)
+                    (int)Math.Round(CurrentBaseClientHeight * scale)
                 );
 
                 layoutClientWidth = targetBaseWidth;
                 MinimumSize = SizeFromClientSize(new Size(
                     (int)Math.Round(targetBaseWidth * MinClientScale),
-                    (int)Math.Round(BaseClientHeight * MinClientScale)
+                    (int)Math.Round(CurrentBaseClientHeight * MinClientScale)
+                ));
+
+                if (ClientSize == nextSize) return;
+
+                isAdjustingClientSize = true;
+                ClientSize = nextSize;
+                isAdjustingClientSize = false;
+            }
+
+            public void ApplyStratagemSlotClientHeight()
+            {
+                if (WindowState != FormWindowState.Normal)
+                    return;
+
+                // F3 편집창도 메인 창과 같은 가로 배율로 추가 슬롯 행 높이를 반영한다.
+                double scale = ClientSize.Width > 0
+                    ? Math.Max(MinClientScale, (double)ClientSize.Width / layoutClientWidth)
+                    : 1.0;
+                Size nextSize = new(
+                    (int)Math.Round(layoutClientWidth * scale),
+                    (int)Math.Round(CurrentBaseClientHeight * scale)
+                );
+
+                MinimumSize = SizeFromClientSize(new Size(
+                    (int)Math.Round(layoutClientWidth * MinClientScale),
+                    (int)Math.Round(CurrentBaseClientHeight * MinClientScale)
                 ));
 
                 if (ClientSize == nextSize) return;

@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -218,6 +219,8 @@ namespace HD2_Helper
         // 장비 선택창은 새 그리드형과 기존 목록형 중 사용자가 고른 형태를 모든 WebView에 동일하게 적용한다.
         private static bool _useLegacyEquipmentLayout;
         private static bool _stratagemReselectEnabled = true;
+        // 기본 OFF: 사용자가 수동 저장을 선택할 때까지 프리셋 파일은 바꾸지 않고, 두 WebView의 화면만 동기화한다.
+        private static bool _presetAutoSaveEnabled;
         private static bool _testModeEnabled;
         private static bool _pauseCrosshairTimer;
         private static bool _pauseSupportWeaponTimer;
@@ -979,6 +982,8 @@ namespace HD2_Helper
                 SendDisabledItemsToWeb(webView);
                 SendPresetsToWeb(webView);
                 SendSettingsToWeb(webView);
+                // F3을 나중에 열어도 원본 창에서 아직 수동 저장하지 않은 현재 로드아웃을 마지막으로 덮어써 동일하게 보이게 한다.
+                SendCurrentLoadoutToWeb(webView);
             };
 
             var assembly = System.Reflection.Assembly.GetEntryAssembly()!;
@@ -1133,6 +1138,16 @@ namespace HD2_Helper
                     {
                         // 재선택 ON은 OCR/아이콘 확인으로 이미 장착된 슬롯도 교체하고, OFF는 빈 슬롯 좌표 선택만 수행한다.
                         _stratagemReselectEnabled = enabledElement.GetBoolean();
+                        SaveSetting();
+                        SendSettingsToWeb();
+                    }
+                }
+                else if (type == "SET_PRESET_AUTOSAVE")
+                {
+                    if (doc.RootElement.TryGetProperty("enabled", out var enabledElement))
+                    {
+                        // 자동저장 여부는 프리셋 데이터가 아닌 프로그램 전체 설정으로 보관한다.
+                        _presetAutoSaveEnabled = enabledElement.GetBoolean();
                         SaveSetting();
                         SendSettingsToWeb();
                     }
@@ -1295,6 +1310,8 @@ namespace HD2_Helper
                             }
                             UpdateSupportWeaponGaugeOverlay();
                             RefreshSupportWeaponGaugeTimerState();
+                            // F3에서 바꾼 지원무기 보조값도 원본 창의 현재 프리셋 표시와 즉시 맞춘다.
+                            SendSettingsToWeb();
                         }
                     }
                 }
@@ -1371,6 +1388,28 @@ namespace HD2_Helper
                 GetLoadoutString(loadoutElement, "secondary"),
                 GetLoadoutString(loadoutElement, "grenade")
             };
+
+            // 한 창에서 바꾼 슬롯/장비는 저장하지 않아도 원본 창과 F3 편집창에 즉시 같은 모습으로 전달한다.
+            SendCurrentLoadoutToWeb();
+        }
+
+        private void SendCurrentLoadoutToWeb(WebView2? target = null)
+        {
+            var payload = new
+            {
+                type = "CURRENT_LOADOUT_SYNC",
+                loadout = new
+                {
+                    stratagems = _currentSlots.Select(value => value ?? "").ToArray(),
+                    overlaySlots = _overlaySlotVisibility.ToArray(),
+                    armor = _currentLoadoutSlots.ElementAtOrDefault(0) ?? "",
+                    primary = _currentLoadoutSlots.ElementAtOrDefault(1) ?? "",
+                    secondary = _currentLoadoutSlots.ElementAtOrDefault(2) ?? "",
+                    grenade = _currentLoadoutSlots.ElementAtOrDefault(3) ?? ""
+                }
+            };
+
+            PostWebMessageToViews(payload, target);
         }
 
         private static bool AreSameSlots(string?[] left, string?[] right)
@@ -1521,6 +1560,33 @@ namespace HD2_Helper
 
             BackupPresetsBeforeOverwrite(existingJson);
             File.WriteAllText(PresetsPath, json, Encoding.UTF8);
+        }
+
+        private static void SavePresetEquipmentLink(string stratagemPresetId, string equipmentPresetId)
+        {
+            if (string.IsNullOrWhiteSpace(stratagemPresetId)) return;
+
+            try
+            {
+                var root = JsonNode.Parse(LoadPresetsJson()) as JsonObject;
+                var stratagemPresets = root?["stratagemPresets"] as JsonArray;
+                if (stratagemPresets == null) return;
+
+                foreach (var node in stratagemPresets.OfType<JsonObject>())
+                {
+                    if (!string.Equals(node["id"]?.GetValue<string>(), stratagemPresetId, StringComparison.Ordinal))
+                        continue;
+
+                    // F4 장비 선택도 자동저장 ON이면 현재 스트라타젬 프리셋의 하위 장비 선택으로 기록한다.
+                    node["equipmentPresetId"] = equipmentPresetId ?? "";
+                    SavePresets(root!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+                    return;
+                }
+            }
+            catch
+            {
+                // 프리셋 파일을 읽을 수 없는 상태에서는 기존 선택 동작만 유지하고 저장은 건너뛴다.
+            }
         }
 
         private static bool ShouldRejectSuspiciousPresetOverwrite(string existingJson, JsonElement incomingPresets)
@@ -1680,6 +1746,11 @@ namespace HD2_Helper
                     if (!uint.TryParse(value, out uint vk)) continue;
                     _stratagemReselectEnabled = vk != 0;
                 }
+                else if (key.Equals("presetAutoSaveEnabled", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!uint.TryParse(value, out uint vk)) continue;
+                    _presetAutoSaveEnabled = vk != 0;
+                }
                 else if (key.Equals("testModeEnabled", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!uint.TryParse(value, out uint vk)) continue;
@@ -1800,6 +1871,7 @@ namespace HD2_Helper
                 $"stratagemCompactLayout={(_stratagemCompactLayout ? 1 : 0)}",
                 $"useLegacyEquipmentLayout={(_useLegacyEquipmentLayout ? 1 : 0)}",
                 $"stratagemReselectEnabled={(_stratagemReselectEnabled ? 1 : 0)}",
+                $"presetAutoSaveEnabled={(_presetAutoSaveEnabled ? 1 : 0)}",
                 $"testModeEnabled={(_testModeEnabled ? 1 : 0)}",
                 $"pauseCrosshairTimer={(_pauseCrosshairTimer ? 1 : 0)}",
                 $"pauseSupportWeaponTimer={(_pauseSupportWeaponTimer ? 1 : 0)}",
@@ -2041,6 +2113,7 @@ namespace HD2_Helper
                 stratagemCompactLayout = _stratagemCompactLayout,
                 useLegacyEquipmentLayout = _useLegacyEquipmentLayout,
                 stratagemReselectEnabled = _stratagemReselectEnabled,
+                presetAutoSaveEnabled = _presetAutoSaveEnabled,
                 testModeEnabled = _testModeEnabled,
                 timerPauses = new
                 {
@@ -3730,7 +3803,11 @@ namespace HD2_Helper
                 var overlaySlots = presetElement.TryGetProperty("overlaySlots", out var overlaySlotsElement)
                     ? ReadOverlaySlotVisibility(overlaySlotsElement)
                     : CreateDefaultOverlaySlotVisibility();
-                presets.Add(new PresetSummary(id, name.Trim(), loadout, supportWeapon, overlaySlots, BuildPresetPreviewImages(loadout)));
+                string equipmentPresetId = presetElement.TryGetProperty("equipmentPresetId", out var equipmentPresetIdElement)
+                    ? equipmentPresetIdElement.GetString() ?? ""
+                    : "";
+                // 기존 프리셋에는 연결값이 없으므로 빈 문자열로 읽어 현재 장비 선택값을 그대로 유지한다.
+                presets.Add(new PresetSummary(id, name.Trim(), loadout, supportWeapon, overlaySlots, equipmentPresetId, BuildPresetPreviewImages(loadout)));
             }
 
             return presets;
@@ -3959,8 +4036,26 @@ namespace HD2_Helper
             _overlaySlotVisibility = preset.OverlaySlots.ToArray();
             ApplyPresetSupportWeaponSettings(preset.SupportWeapon);
 
+            // F4에서 스트라타젬 프리셋을 고르면 그 프리셋이 저장한 장비 프리셋도 함께 적용한다.
+            var linkedEquipmentPreset = LoadEquipmentPresetSummaries()
+                .FirstOrDefault(item => string.Equals(item.Id, preset.EquipmentPresetId, StringComparison.Ordinal));
+            if (linkedEquipmentPreset != null)
+            {
+                _selectedEquipmentPresetId = linkedEquipmentPreset.Id;
+                _currentLoadoutSlots = new[]
+                {
+                    EmptyToNull(linkedEquipmentPreset.Loadout.Armor),
+                    EmptyToNull(linkedEquipmentPreset.Loadout.Primary),
+                    EmptyToNull(linkedEquipmentPreset.Loadout.Secondary),
+                    EmptyToNull(linkedEquipmentPreset.Loadout.Grenade)
+                };
+            }
+
             SaveSetting();
             SendPresetSelectionToWeb(preset.Id);
+            if (linkedEquipmentPreset != null)
+                SendEquipmentPresetSelectionToWeb(linkedEquipmentPreset.Id);
+            SendCurrentLoadoutToWeb();
             _presetOverlayRequestedVisible = false;
             _presetOverlayForm?.Hide();
             RestoreGameFocus();
@@ -3976,8 +4071,14 @@ namespace HD2_Helper
                 EmptyToNull(preset.Loadout.Secondary),
                 EmptyToNull(preset.Loadout.Grenade)
             };
+            if (_presetAutoSaveEnabled)
+            {
+                SavePresetEquipmentLink(_selectedPresetId, preset.Id);
+                SendPresetsToWeb();
+            }
             SaveSetting();
             SendEquipmentPresetSelectionToWeb(preset.Id);
+            SendCurrentLoadoutToWeb();
             _presetOverlayRequestedVisible = false;
             _presetOverlayForm?.Hide();
             RestoreGameFocus();
@@ -6516,7 +6617,7 @@ namespace HD2_Helper
             }
         }
 
-        public record PresetSummary(string Id, string Name, PresetLoadout Loadout, SupportWeaponAssistSettings SupportWeapon, bool[] OverlaySlots, Image?[] PreviewImages);
+        public record PresetSummary(string Id, string Name, PresetLoadout Loadout, SupportWeaponAssistSettings SupportWeapon, bool[] OverlaySlots, string EquipmentPresetId, Image?[] PreviewImages);
         public record EquipmentPresetSummary(string Id, string Name, PresetLoadout Loadout, Image?[] PreviewImages);
 
         public class PresetLoadout

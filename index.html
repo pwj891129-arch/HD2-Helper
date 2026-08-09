@@ -1678,6 +1678,10 @@
                         <input id="setting-stratagem-reselect-enabled" type="checkbox" onchange="toggleStratagemReselectEnabled(this.checked)">
                     </label>
                     <label class="crosshair-row">
+                        <span class="setting-label">프리셋 자동저장</span>
+                        <input id="setting-preset-auto-save" type="checkbox" onchange="togglePresetAutoSave(this.checked)">
+                    </label>
+                    <label class="crosshair-row">
                         <span class="setting-label">여분 슬롯 추가</span>
                         <input id="setting-additional-stratagem-slots" class="setting-number-control" type="number" min="0" max="20" step="1" inputmode="numeric" onchange="updateAdditionalStratagemSlots(this.value)" onblur="updateAdditionalStratagemSlots(this.value)">
                     </label>
@@ -2018,6 +2022,9 @@
         let equipmentPresetsLoaded = false;
         let selectedPresetId = '';
         let selectedEquipmentPresetId = '';
+        // 자동저장이 꺼져도 두 창의 현재 편집 화면은 동기화하되, 디스크 저장만 이 값으로 제어한다.
+        let presetAutoSaveEnabled = false;
+        let pendingPresetAutoSaveTimer = 0;
         let pendingSelectedPresetId = '';
         let pendingSelectedEquipmentPresetId = '';
         let editingPresetId = '';
@@ -2311,6 +2318,13 @@
             // 재선택을 끄면 자동선택은 OCR 보정 없이 프리셋 좌표만 따라가므로 빈 슬롯 최초 선택에 적합하다.
             stratagemReselectEnabled = enabled === true;
             postAppMessage({ type: 'SET_STRATAGEM_RESELECT_ENABLED', enabled: stratagemReselectEnabled });
+        }
+
+        function togglePresetAutoSave(enabled) {
+            // OFF는 수동 저장 전까지 현재 편집값만 유지하고, ON부터 변경 즉시 연결된 프리셋을 기록한다.
+            presetAutoSaveEnabled = enabled === true;
+            postAppMessage({ type: 'SET_PRESET_AUTOSAVE', enabled: presetAutoSaveEnabled });
+            if (presetAutoSaveEnabled) queueActivePresetAutoSave();
         }
 
         async function toggleLegacyEquipmentLayout(enabled) {
@@ -2738,11 +2752,14 @@
             stratagemCompactLayout = data.stratagemCompactLayout === true;
             useLegacyEquipmentLayout = data.useLegacyEquipmentLayout === true;
             stratagemReselectEnabled = data.stratagemReselectEnabled !== false;
+            presetAutoSaveEnabled = data.presetAutoSaveEnabled === true;
             testModeEnabled = data.testModeEnabled === true;
             muteGameAudioWhenInactive = data.muteGameAudioWhenInactive === true;
             excludeOverlaysFromCapture = data.excludeOverlaysFromCapture === true;
             const stratagemReselectControl = document.getElementById('setting-stratagem-reselect-enabled');
             if (stratagemReselectControl) stratagemReselectControl.checked = stratagemReselectEnabled;
+            const presetAutoSaveControl = document.getElementById('setting-preset-auto-save');
+            if (presetAutoSaveControl) presetAutoSaveControl.checked = presetAutoSaveEnabled;
             const legacyEquipmentLayoutControl = document.getElementById('setting-legacy-equipment-layout');
             if (legacyEquipmentLayoutControl) legacyEquipmentLayoutControl.checked = useLegacyEquipmentLayout;
             const testModeControl = document.getElementById('setting-test-mode');
@@ -2873,6 +2890,9 @@
                     selectPresetFromApp(data.id);
                 } else if (data.type === 'SELECT_EQUIPMENT_PRESET_FROM_APP' && typeof data.id === 'string') {
                     selectEquipmentPresetFromApp(data.id);
+                } else if (data.type === 'CURRENT_LOADOUT_SYNC' && data.loadout) {
+                    // 원본 창과 F3 편집창은 저장 여부와 무관하게 현재 편집 중인 로드아웃을 같은 모습으로 유지한다.
+                    applyCurrentLoadoutFromApp(data.loadout);
                 } else if (data.type === 'SETTINGS_LOADED') {
                     renderSettings(data);
                 }
@@ -3790,7 +3810,8 @@
             preset.overlaySlots = overlaySlots;
             renderStratagemOverlayState(document.getElementById(`slot-${index}`), overlaySlots[index - 1]);
             syncCurrentLoadoutToApp();
-            savePresets();
+            // 휠 표시 여부도 스트라타젬 프리셋 데이터이므로 자동저장 ON일 때만 즉시 기록한다.
+            queueActivePresetAutoSave();
         }
 
         function clearEquipmentLoadout(shouldSync = true) {
@@ -3839,7 +3860,9 @@
                     ...(kind === 'stratagem'
                         ? {
                             supportWeapon: normalizePresetSupportWeaponSettings(preset.supportWeapon),
-                            overlaySlots: normalizeOverlaySlotVisibility(preset.overlaySlots)
+                            overlaySlots: normalizeOverlaySlotVisibility(preset.overlaySlots),
+                            // 장비 프리셋은 독립 목록으로 두되, 스트라타젬 프리셋이 마지막으로 연결한 항목을 기억한다.
+                            equipmentPresetId: typeof preset.equipmentPresetId === 'string' ? preset.equipmentPresetId : ''
                         }
                         : {})
                 }));
@@ -3914,9 +3937,71 @@
 
         function syncCurrentLoadoutToApp() {
             postAppMessage({ type: 'CURRENT_LOADOUT', loadout: getCurrentLoadout() });
+            queueActivePresetAutoSave();
         }
 
-        async function applyPresetLoadout(loadout) {
+        function queueActivePresetAutoSave() {
+            if (!presetAutoSaveEnabled || !selectedPresetId) return;
+
+            // 드래그와 연속 선택은 한 프레임 안에 여러 변경을 만들 수 있어, 마지막 상태만 한 번 저장한다.
+            clearTimeout(pendingPresetAutoSaveTimer);
+            pendingPresetAutoSaveTimer = setTimeout(() => saveActivePresetState(), 0);
+        }
+
+        function saveActivePresetState(showFeedback = false) {
+            const stratagemPreset = presets.find(item => item.id === selectedPresetId);
+            if (!stratagemPreset) return;
+
+            const loadout = getCurrentLoadout();
+            stratagemPreset.loadout = normalizeStratagemLoadout(loadout);
+            stratagemPreset.supportWeapon = getCurrentPresetSupportWeapon();
+            stratagemPreset.overlaySlots = normalizeOverlaySlotVisibility(loadout.overlaySlots);
+            stratagemPreset.equipmentPresetId = selectedEquipmentPresetId || '';
+
+            const equipmentPreset = equipmentPresets.find(item => item.id === selectedEquipmentPresetId);
+            if (equipmentPreset) equipmentPreset.loadout = normalizeEquipmentLoadout(loadout);
+
+            // 연결과 양쪽 프리셋 내용을 하나의 저장 메시지로 보낸다. 두 WebView가 서로 다른 부분을 덮어쓰지 않게 한다.
+            savePresets();
+            saveSelectedPresetId();
+            saveSelectedEquipmentPresetId();
+            renderPresetTabs();
+            renderEquipmentPresetTabs();
+            if (showFeedback) showPresetSaveFeedback(selectedPresetId);
+        }
+
+        function getLinkedEquipmentPreset(preset) {
+            const linkedId = typeof preset?.equipmentPresetId === 'string' ? preset.equipmentPresetId : '';
+            return linkedId ? equipmentPresets.find(item => item.id === linkedId) || null : null;
+        }
+
+        function applyLinkedEquipmentPreset(preset, saveSelection = false) {
+            const equipmentPreset = getLinkedEquipmentPreset(preset);
+            if (!equipmentPreset) return false;
+
+            selectedEquipmentPresetId = equipmentPreset.id;
+            applyEquipmentPresetLoadout(equipmentPreset.loadout);
+            renderEquipmentPresetTabs();
+            if (saveSelection) saveSelectedEquipmentPresetId();
+            return true;
+        }
+
+        function linkSelectedEquipmentPresetToCurrentStratagem() {
+            const stratagemPreset = presets.find(item => item.id === selectedPresetId);
+            if (!stratagemPreset || !presetAutoSaveEnabled) return;
+
+            // 자동저장 ON에서만 연결 ID를 프리셋 객체와 디스크에 함께 기록한다. OFF에서는 수동 저장 시점에만 반영된다.
+            stratagemPreset.equipmentPresetId = selectedEquipmentPresetId || '';
+            saveActivePresetState();
+        }
+
+        async function applyCurrentLoadoutFromApp(loadout) {
+            // 앱에서 다시 배포한 값은 현재 화면만 갱신하고 CURRENT_LOADOUT을 재전송하지 않아 동기화 루프를 막는다.
+            await applyStratagemPresetLoadout(loadout, loadout.overlaySlots, false);
+            await applyEquipmentPresetLoadout(loadout, false);
+        }
+
+        async function applyPresetLoadout(loadout, shouldSync = true) {
             const renderToken = ++loadoutRenderToken;
             const presetLoadout = normalizePresetLoadout(loadout);
             if (renderToken !== loadoutRenderToken) return;
@@ -3942,10 +4027,10 @@
             renderLoadoutBox('주 무기', presetLoadout.primary, equipmentImageUrls[1]);
             renderLoadoutBox('보조 무기', presetLoadout.secondary, equipmentImageUrls[2]);
             renderLoadoutBox('투척 무기', presetLoadout.grenade, equipmentImageUrls[3]);
-            syncCurrentLoadoutToApp();
+            if (shouldSync) syncCurrentLoadoutToApp();
         }
 
-        async function applyStratagemPresetLoadout(loadout, overlaySlots = getSelectedPresetOverlayVisibility()) {
+        async function applyStratagemPresetLoadout(loadout, overlaySlots = getSelectedPresetOverlayVisibility(), shouldSync = true) {
             const renderToken = ++loadoutRenderToken;
             const presetLoadout = normalizeStratagemLoadout(loadout);
             const normalizedOverlaySlots = Array.isArray(overlaySlots) ? normalizeOverlaySlotVisibility(overlaySlots) : null;
@@ -3961,10 +4046,10 @@
                     normalizedOverlaySlots ? normalizedOverlaySlots[index] : null
                 );
             });
-            syncCurrentLoadoutToApp();
+            if (shouldSync) syncCurrentLoadoutToApp();
         }
 
-        async function applyEquipmentPresetLoadout(loadout) {
+        async function applyEquipmentPresetLoadout(loadout, shouldSync = true) {
             const renderToken = ++loadoutRenderToken;
             const presetLoadout = normalizeEquipmentLoadout(loadout);
             const values = [
@@ -3975,7 +4060,7 @@
             if (renderToken !== loadoutRenderToken) return;
 
             values.forEach(([type, name], index) => renderLoadoutBox(type, name, imageUrls[index] || ''));
-            syncCurrentLoadoutToApp();
+            if (shouldSync) syncCurrentLoadoutToApp();
         }
 
         function applyPresetSupportWeaponSettings(supportWeapon) {
@@ -4240,7 +4325,7 @@
 
             if (selectedPresetId === preset.id) {
                 pendingSelectedPresetId = '';
-                applyPendingEquipmentPreset();
+                if (!applyLinkedEquipmentPreset(preset)) applyPendingEquipmentPreset();
                 return;
             }
 
@@ -4249,7 +4334,7 @@
             applyStratagemPresetLoadout(preset.loadout);
             applyPresetSupportWeaponSettings(preset.supportWeapon);
             renderPresetTabs();
-            applyPendingEquipmentPreset();
+            if (!applyLinkedEquipmentPreset(preset)) applyPendingEquipmentPreset();
         }
 
         function applyPendingEquipmentPreset() {
@@ -4562,7 +4647,9 @@
                 name: getNextPresetName(),
                 loadout: normalizeStratagemLoadout(),
                 supportWeapon: getCurrentPresetSupportWeapon(),
-                overlaySlots: getDefaultOverlaySlotVisibility()
+                overlaySlots: getDefaultOverlaySlotVisibility(),
+                // 새 스트라타젬 프리셋은 장비 프리셋을 아직 강제로 연결하지 않는다.
+                equipmentPresetId: ''
             };
 
             const insertIndex = insertAfterId
@@ -4647,7 +4734,9 @@
                 name: getDuplicatePresetName(preset.name),
                 loadout: normalizeStratagemLoadout(preset.loadout),
                 supportWeapon: normalizePresetSupportWeaponSettings(preset.supportWeapon),
-                overlaySlots: normalizeOverlaySlotVisibility(preset.overlaySlots)
+                overlaySlots: normalizeOverlaySlotVisibility(preset.overlaySlots),
+                // 복제본도 원본이 고른 장비 프리셋을 그대로 연결해 같은 조합으로 바로 비교할 수 있게 한다.
+                equipmentPresetId: typeof preset.equipmentPresetId === 'string' ? preset.equipmentPresetId : ''
             };
 
             presets.splice(sourceIndex + 1, 0, duplicatedPreset);
@@ -4692,6 +4781,7 @@
             selectedPresetId = id;
             applyStratagemPresetLoadout(preset.loadout);
             applyPresetSupportWeaponSettings(preset.supportWeapon);
+            applyLinkedEquipmentPreset(preset, true);
             renderPresetTabs();
             saveSelectedPresetId();
 
@@ -4731,6 +4821,7 @@
             selectedPresetId = id;
             applyStratagemPresetLoadout(preset.loadout);
             applyPresetSupportWeaponSettings(preset.supportWeapon);
+            applyLinkedEquipmentPreset(preset);
             renderPresetTabs();
         }
 
@@ -4823,6 +4914,8 @@
             preset.loadout = normalizeStratagemLoadout(getCurrentLoadout());
             preset.supportWeapon = getCurrentPresetSupportWeapon();
             preset.overlaySlots = normalizeOverlaySlotVisibility(getCurrentLoadout().overlaySlots);
+            // 수동 저장은 현재 활성 장비 프리셋을 이 스트라타젬 프리셋의 하위 선택값으로 확정한다.
+            preset.equipmentPresetId = selectedEquipmentPresetId || '';
             selectedPresetId = id;
             renderPresetTabs();
             savePresets();
@@ -4953,7 +5046,10 @@
             selectedEquipmentPresetId = id;
             applyEquipmentPresetLoadout(preset.loadout);
             renderEquipmentPresetTabs();
-            if (saveSelection) saveSelectedEquipmentPresetId();
+            if (saveSelection) {
+                saveSelectedEquipmentPresetId();
+                linkSelectedEquipmentPresetToCurrentStratagem();
+            }
         }
 
         function selectEquipmentPresetFromApp(id) {
@@ -4979,6 +5075,10 @@
 
             const removedSelectedPreset = selectedEquipmentPresetId === id;
             equipmentPresets = nextEquipmentPresets;
+            // 삭제된 장비 프리셋을 가리키는 스트라타젬 프리셋은 빈 연결로 정리해 다음 선택 때 잘못된 장비를 불러오지 않는다.
+            presets.forEach(preset => {
+                if (preset.equipmentPresetId === id) preset.equipmentPresetId = '';
+            });
             if (removedSelectedPreset) {
                 // 장비 삭제도 스트라타젬 선택은 보존하고, 남은 첫 장비 프리셋만 적용한다.
                 const nextPreset = equipmentPresets[0];

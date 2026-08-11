@@ -1769,10 +1769,6 @@
                         <button class="setting-value-btn" type="button" tabindex="-1">열기</button>
                     </div>
                     <div class="settings-subtitle">지원무기 보조</div>
-                    <div class="setting-row" data-setting-row="supportWeaponModeKey" onclick="startKeyCapture('supportWeaponModeKey')">
-                        <span class="setting-label">자동사격 모드전환 키</span>
-                        <button class="setting-key-btn" type="button" data-setting-key="supportWeaponModeKey" tabindex="-1"></button>
-                    </div>
                     <label class="crosshair-row">
                         <span class="setting-label">기능 모드</span>
                         <select class="crosshair-control crosshair-select" data-support-weapon-setting="mode">
@@ -2822,7 +2818,6 @@
             updateSettingKeyButton('manualStratagemLeftKey', keys.manualStratagemLeftKey, data.waitingTarget);
             updateSettingKeyButton('manualStratagemRightKey', keys.manualStratagemRightKey, data.waitingTarget);
             updateSettingKeyButton('crosshairToggleKey', keys.crosshairToggleKey, data.waitingTarget);
-            updateSettingKeyButton('supportWeaponModeKey', keys.supportWeaponModeKey, data.waitingTarget);
             renderSlotKeySettings(keys.slots || [], data.waitingTarget);
             renderCrosshairSettings(data.crosshair || currentCrosshairSettings || {});
             const globalSupportWeaponSettings = normalizeSupportWeaponSettings(data.supportWeapon || currentSupportWeaponSettings || {});

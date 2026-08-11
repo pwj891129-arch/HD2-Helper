@@ -216,8 +216,6 @@ namespace HD2_Helper
         private static uint _crosshairToggleKey = 0;
         private static uint _helperEditorKey = (uint)Keys.F3;
         private static uint _presetOverlayKey = (uint)Keys.F4;
-        // 지원무기 보조 모드는 Alt와 조합해 쓰므로 기본 키만 보관하고, 기본 조합은 Alt+3이다.
-        private static uint _supportWeaponModeKey = (uint)Keys.D3;
         private static uint _chatKey = (uint)Keys.Enter;
         private static bool _stratagemCompactLayout;
         // 장비 선택창은 새 그리드형과 기존 목록형 중 사용자가 고른 형태를 모든 WebView에 동일하게 적용한다.
@@ -277,13 +275,12 @@ namespace HD2_Helper
         private bool _supportWeaponSuppressLeftUntilRelease;
         private bool _supportWeaponPausedByWeaponKey;
         private string _supportWeaponMode = "Off";
-        private string _supportWeaponModeMessage = "";
-        private DateTime _supportWeaponModeMessageUntil = DateTime.MinValue;
         private bool? _lastObservedGameActive;
         private readonly Dictionary<string, bool> _gameAudioMuteStatesBeforeHelper = new();
         private DateTime _lastAutoReloadRedSeenAt = DateTime.MinValue;
         private DateTime _lastAutoReloadAttemptAt = DateTime.MinValue;
         private AutoReloadDetectionResult _lastAutoReloadDetection = AutoReloadDetectionResult.Empty;
+        private readonly Queue<(DateTime CapturedAt, int BrightRedPixels)> _autoReloadRedSamples = new();
 
         public class InputEventArgs : EventArgs
         {
@@ -1736,6 +1733,7 @@ namespace HD2_Helper
         {
             if (!File.Exists(SettingsPath)) return;
 
+            bool loadedAutoReloadX = false;
             foreach (string rawLine in File.ReadAllLines(SettingsPath, Encoding.UTF8))
             {
                 string line = rawLine.Trim();
@@ -1834,6 +1832,7 @@ namespace HD2_Helper
                     && int.TryParse(value, out int autoReloadValue))
                 {
                     // 주무기 탄창 감지값은 OCR 영역과 별개로 보관해, 화면 보정이 서로 영향을 주지 않게 한다.
+                    if (key.Equals("autoReload.x", StringComparison.OrdinalIgnoreCase)) loadedAutoReloadX = true;
                     _autoReloadSettings = _autoReloadSettings.WithProperty(key["autoReload.".Length..], autoReloadValue).Normalized();
                 }
                 else if (TryGetManualStratagemDirection(key, out string manualDirection))
@@ -1879,11 +1878,6 @@ namespace HD2_Helper
                     if (!uint.TryParse(value, out uint vk)) continue;
                     _presetOverlayKey = vk;
                 }
-                else if (key.Equals("supportWeaponModeKey", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (!uint.TryParse(value, out uint vk)) continue;
-                    _supportWeaponModeKey = vk;
-                }
                 else if (TryParseOcrRegionSettingKey(key, out string? ocrType, out string? property)
                     && ocrType != null
                     && property != null
@@ -1904,6 +1898,19 @@ namespace HD2_Helper
                     if (vk == 0) _slotKey.Remove(slot - 1);
                     else _slotKey[slot - 1] = vk;
                 }
+            }
+
+            // 이전 기본 보정값(X=300)만 그대로 쓰던 설치본은 배낭이 없을 때 주무기 아이콘을 놓쳤다.
+            // 사용자가 따로 보정한 값은 건드리지 않고, 예전 기본 조합일 때만 새 기본 시작점으로 옮긴다.
+            if (loadedAutoReloadX
+                && _autoReloadSettings.X == 300
+                && _autoReloadSettings.Y == 875
+                && _autoReloadSettings.Width == 360
+                && _autoReloadSettings.Height == 190
+                && _autoReloadSettings.BorderThickness == 2
+                && _autoReloadSettings.MinRedPixels == 120)
+            {
+                _autoReloadSettings.X = 150;
             }
 
             // settings.ini에서 추가 슬롯 수를 읽은 뒤에만 배열 길이를 맞춰, 기존 프리셋 데이터가 잘리지 않게 한다.
@@ -1949,7 +1956,6 @@ namespace HD2_Helper
                 $"crosshairToggleKey={_crosshairToggleKey}",
                 $"helperEditorKey={_helperEditorKey}",
                 $"presetOverlayKey={_presetOverlayKey}",
-                $"supportWeaponModeKey={_supportWeaponModeKey}",
                 // 두 종류 프리셋의 선택을 따로 저장해 재실행 후에도 같은 조합을 복원한다.
                 $"selectedPresetId={_selectedPresetId}",
                 $"selectedEquipmentPresetId={_selectedEquipmentPresetId}"
@@ -1977,7 +1983,7 @@ namespace HD2_Helper
         {
             if (string.IsNullOrWhiteSpace(target)) return false;
             if (TryGetManualStratagemDirection(target, out _)) return true;
-            if (target is "autoSelectKey" or "overlayKey" or "reinforceKey" or "stratagemComboKey" or "crosshairToggleKey" or "helperEditorKey" or "presetOverlayKey" or "supportWeaponModeKey") return true;
+            if (target is "autoSelectKey" or "overlayKey" or "reinforceKey" or "stratagemComboKey" or "crosshairToggleKey" or "helperEditorKey" or "presetOverlayKey") return true;
             return target.StartsWith("slot", StringComparison.OrdinalIgnoreCase)
                 && int.TryParse(target[4..], out int slot)
                 && slot >= 1
@@ -2032,7 +2038,6 @@ namespace HD2_Helper
             else if (target == "crosshairToggleKey") _crosshairToggleKey = 0;
             else if (target == "helperEditorKey") _helperEditorKey = 0;
             else if (target == "presetOverlayKey") _presetOverlayKey = 0;
-            else if (target == "supportWeaponModeKey") _supportWeaponModeKey = 0;
             else if (target!.StartsWith("slot", StringComparison.OrdinalIgnoreCase)
                 && int.TryParse(target[4..], out int slot)
                 && slot >= 1
@@ -2077,15 +2082,6 @@ namespace HD2_Helper
                     _manualStratagemKey[manualDirection] = vkCode;
                 }
 
-                SaveSetting();
-                SendSettingsToWeb();
-                return;
-            }
-
-            if (target == "supportWeaponModeKey")
-            {
-                // 모드 전환은 항상 Alt와 조합하므로 일반 단축키와 같은 숫자/키를 써도 충돌하지 않는다.
-                _supportWeaponModeKey = vkCode;
                 SaveSetting();
                 SendSettingsToWeb();
                 return;
@@ -2213,11 +2209,6 @@ namespace HD2_Helper
                     crosshairToggleKey = new { value = _crosshairToggleKey, name = GetKeyName(_crosshairToggleKey) },
                     helperEditorKey = new { value = _helperEditorKey, name = GetKeyName(_helperEditorKey) },
                     presetOverlayKey = new { value = _presetOverlayKey, name = GetKeyName(_presetOverlayKey) },
-                    supportWeaponModeKey = new
-                    {
-                        value = _supportWeaponModeKey,
-                        name = _supportWeaponModeKey == 0 ? "없음" : $"Alt+{GetKeyName(_supportWeaponModeKey)}"
-                    },
                     slots = slotKeys
                 }
             };
@@ -2273,6 +2264,7 @@ namespace HD2_Helper
             {
                 _supportWeaponSettings = new SupportWeaponAssistSettings();
             }
+
         }
 
         private static JsonElement GetStratagemPresetsElement(JsonElement root)
@@ -2375,14 +2367,21 @@ namespace HD2_Helper
             if (!_autoReloadEnabled || !IsGameActive() || _isChat)
             {
                 _lastAutoReloadRedSeenAt = DateTime.MinValue;
+                _autoReloadRedSamples.Clear();
                 return;
             }
 
             AutoReloadDetectionResult result = DetectEmptyPrimaryWeapon();
-            _lastAutoReloadDetection = result;
             DateTime now = DateTime.UtcNow;
+            bool blinkConfirmed = result.IsEmpty && IsAutoReloadBlinkConfirmed(now, result.BrightRedPixels, result.Threshold);
+            // 정적인 붉은 배경/로비 UI는 후보로 남더라도 빨강 경고가 켜졌다 꺼지는 패턴이 없으므로 빈 탄창으로 확정하지 않는다.
+            _lastAutoReloadDetection = result with
+            {
+                IsEmpty = blinkConfirmed,
+                Note = blinkConfirmed ? "주무기 빈 탄창 깜빡임 확인" : "주무기 빨강 후보 확인 중"
+            };
 
-            if (result.IsEmpty)
+            if (blinkConfirmed)
             {
                 // HUD가 깜빡이는 프레임 사이에도 잠깐 상태를 유지해 공격 입력과 놓치지 않게 한다.
                 _lastAutoReloadRedSeenAt = now;
@@ -2391,6 +2390,28 @@ namespace HD2_Helper
             {
                 _lastAutoReloadRedSeenAt = DateTime.MinValue;
             }
+        }
+
+        private bool IsAutoReloadBlinkConfirmed(DateTime now, int brightRedPixels, int threshold)
+        {
+            _autoReloadRedSamples.Enqueue((now, brightRedPixels));
+            while (_autoReloadRedSamples.Count > 0
+                && now - _autoReloadRedSamples.Peek().CapturedAt > TimeSpan.FromMilliseconds(1200))
+            {
+                _autoReloadRedSamples.Dequeue();
+            }
+
+            if (_autoReloadRedSamples.Count < 4 || threshold <= 0)
+                return false;
+
+            int maximum = _autoReloadRedSamples.Max(sample => sample.BrightRedPixels);
+            int minimum = _autoReloadRedSamples.Min(sample => sample.BrightRedPixels);
+            int lowLimit = Math.Max(8, threshold / 3);
+            // 빈 탄창 HUD는 빨간색 무기/탄창을 주기적으로 켰다 끈다. 장면의 정적인 붉은 색은 이 낙폭을 만들지 못한다.
+            return brightRedPixels >= threshold
+                && maximum >= threshold
+                && minimum <= lowLimit
+                && maximum - minimum >= Math.Max(30, threshold * 2 / 3);
         }
 
         private void TryTriggerAutoReloadFromPrimaryAttack()
@@ -2738,45 +2759,6 @@ namespace HD2_Helper
             _supportWeaponWarningPlayed = false;
         }
 
-        private bool TryHandleSupportWeaponShortcut(uint vkCode)
-        {
-            if (_supportWeaponModeKey == 0 || vkCode != _supportWeaponModeKey)
-                return false;
-
-            if (!IsGameActive())
-                return false;
-
-            bool alt = IsPhysicalKeyDown(Keys.Menu) || IsPhysicalKeyDown(Keys.LMenu) || IsPhysicalKeyDown(Keys.RMenu);
-
-            if (alt)
-            {
-                // Alt+설정키는 지원무기 종류 교체 대신 보조 기능 모드를 순환한다.
-                _supportWeaponMode = _supportWeaponMode switch
-                {
-                    "Off" => "AutoFire",
-                    "AutoFire" => "AutoRepeat",
-                    "AutoRepeat" => "Danger",
-                    _ => "Off"
-                };
-                _supportWeaponSettings = _supportWeaponSettings.Normalized();
-                _supportWeaponSettings.Mode = _supportWeaponMode;
-
-                // 모드 전환은 전투 중 임시 변경으로만 취급한다. 프리셋 저장 버튼/Ctrl+S를 누르기 전까지 디스크에는 남기지 않는다.
-                ShowSupportWeaponModeMessage($"지원무기 기능: {GetSupportWeaponModeDisplayName(_supportWeaponMode)}");
-                return true;
-            }
-
-            return false;
-        }
-
-        private void ShowSupportWeaponModeMessage(string message)
-        {
-            _supportWeaponModeMessage = message;
-            _supportWeaponModeMessageUntil = DateTime.UtcNow.AddMilliseconds(300);
-            UpdateSupportWeaponGaugeOverlay();
-            RefreshSupportWeaponGaugeTimerState();
-        }
-
         private bool ShouldRunSupportWeaponGaugeTimer()
         {
             if (_pauseSupportWeaponTimer)
@@ -2785,15 +2767,10 @@ namespace HD2_Helper
             if (!IsGameActive() || _isChat || _supportWeaponPausedByWeaponKey)
                 return false;
 
-            bool messageActive = !string.IsNullOrWhiteSpace(_supportWeaponModeMessage)
-                && DateTime.UtcNow < _supportWeaponModeMessageUntil;
-            if (messageActive)
-                return true;
-
             if (_supportWeaponMode == "Off")
                 return false;
 
-            // 상시 갱신 OFF에서는 마우스를 누르는 동안과 짧은 모드 안내 시간에만 25ms 타이머를 사용한다.
+            // 상시 갱신 OFF에서는 실제 발사 입력이 있는 동안에만 25ms 타이머를 사용한다.
             return _supportWeaponSettings.GaugeAlwaysRefresh
                 || _isLeftMouseButtonDown
                 || (GetAsyncKeyState((int)Keys.LButton) & 0x8000) != 0;
@@ -2825,10 +2802,9 @@ namespace HD2_Helper
         private void UpdateSupportWeaponGaugeOverlay()
         {
             DateTime now = DateTime.UtcNow;
-            bool messageActive = !string.IsNullOrWhiteSpace(_supportWeaponModeMessage) && now < _supportWeaponModeMessageUntil;
             bool gaugeEnabled = _supportWeaponMode != "Off" && !_supportWeaponPausedByWeaponKey;
 
-            if (!IsGameActive() || _isChat || CursorUtil.IsVisible() || (!messageActive && !gaugeEnabled))
+            if (!IsGameActive() || _isChat || CursorUtil.IsVisible() || !gaugeEnabled)
             {
                 _supportWeaponGaugeForm?.Hide();
                 return;
@@ -2873,7 +2849,6 @@ namespace HD2_Helper
                 return;
             }
 
-            string message = messageActive ? _supportWeaponModeMessage : "";
             double progress = gaugeEnabled ? Math.Clamp(elapsedSeconds / 2.95, 0, 1) : 0;
 
             if (_supportWeaponGaugeForm == null || _supportWeaponGaugeForm.IsDisposed)
@@ -2881,7 +2856,7 @@ namespace HD2_Helper
 
             // 지원무기 게이지는 조준점 중앙을 기준으로 위치 보정값을 더해 해상도 변화에도 같은 위치를 유지한다.
             bool wasGaugeVisible = _supportWeaponGaugeForm.Visible;
-            _supportWeaponGaugeForm.ApplyState(_supportWeaponSettings, center, progress, elapsedSeconds, gaugeEnabled, message, _supportWeaponMode);
+            _supportWeaponGaugeForm.ApplyState(_supportWeaponSettings, center, progress, elapsedSeconds, gaugeEnabled, "", _supportWeaponMode);
             if (!wasGaugeVisible)
             {
                 _supportWeaponGaugeForm.Show();
@@ -3469,11 +3444,6 @@ namespace HD2_Helper
 
             if (!e.IsDown)
                 return;
-
-            if (TryHandleSupportWeaponShortcut(vkCode))
-            {
-                return;
-            }
 
             if (vkCode == _autoSelectKey)
             {
@@ -7647,7 +7617,7 @@ namespace HD2_Helper
         public class AutoReloadSettings
         {
             // 1920x1080 기준 좌하단 HUD의 가장 오른쪽 주무기 영역이다. 왼쪽의 수류탄/배낭은 처음부터 포함하지 않는다.
-            public int X { get; set; } = 300;
+            public int X { get; set; } = 150;
             public int Y { get; set; } = 875;
             public int Width { get; set; } = 360;
             public int Height { get; set; } = 190;

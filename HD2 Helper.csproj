@@ -20,7 +20,8 @@
 		<DebugSymbols>false</DebugSymbols>
 		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
 		<!-- GitHub 릴리스와 업데이터가 동일한 버전을 판별하도록 배포 버전을 함께 갱신한다. -->
-		<Version>2.0.27</Version>
+		<!-- 2.0.28-test GitHub 사전 릴리스와 대응하는 실행 파일 버전이다. -->
+		<Version>2.0.28</Version>
 		<GenerateAssemblyInfo>true</GenerateAssemblyInfo>
 	</PropertyGroup>
 

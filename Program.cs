@@ -1829,7 +1829,7 @@ namespace HD2_Helper
         {
             if (!File.Exists(SettingsPath)) return;
 
-            bool loadedAutoReloadPromptRegion = false;
+            bool loadedCurrentAutoReloadPromptRegion = false;
             foreach (string rawLine in File.ReadAllLines(SettingsPath, Encoding.UTF8))
             {
                 string line = rawLine.Trim();
@@ -1926,8 +1926,8 @@ namespace HD2_Helper
                 }
                 else if (key.Equals("autoReload.promptRegionVersion", StringComparison.OrdinalIgnoreCase))
                 {
-                    // 2 이전 값은 HUD 커브에 맞춘 중앙 장전 안내 영역보다 위쪽에 있어, 한 번만 새 기준값으로 교체한다.
-                    loadedAutoReloadPromptRegion = int.TryParse(value, out int version) && version >= 2;
+                    // 3 이전 기본 영역은 HUD 커브가 큰 경우 높이가 부족하므로, 기존 사용자 보정값과 구분해 한 번만 새 기준값으로 교체한다.
+                    loadedCurrentAutoReloadPromptRegion = int.TryParse(value, out int version) && version >= 3;
                 }
                 else if (key.StartsWith("autoReload.", StringComparison.OrdinalIgnoreCase)
                     && int.TryParse(value, out int autoReloadValue))
@@ -2000,9 +2000,9 @@ namespace HD2_Helper
                 }
             }
 
-            if (!loadedAutoReloadPromptRegion)
+            if (!loadedCurrentAutoReloadPromptRegion && IsLegacyAutoReloadDefault(_autoReloadSettings))
             {
-                // 구버전의 좌하단 HUD 또는 이전 중앙 보정값은 현재 안내 위치와 다르므로 새 기본값을 사용한다.
+                // 예전 기본값만 새 중앙 장전 안내 영역으로 바꾸고, 사용자가 직접 저장한 보정값은 보존한다.
                 _autoReloadSettings = new AutoReloadSettings();
             }
 
@@ -2031,7 +2031,7 @@ namespace HD2_Helper
                 $"muteGameAudioWhenInactive={(_muteGameAudioWhenInactive ? 1 : 0)}",
                 $"excludeOverlaysFromCapture={(_excludeOverlaysFromCapture ? 1 : 0)}",
                 $"autoReloadEnabled={(_autoReloadEnabled ? 1 : 0)}",
-                $"autoReload.promptRegionVersion=2",
+                $"autoReload.promptRegionVersion=3",
                 $"autoReload.x={_autoReloadSettings.Normalized().X}",
                 $"autoReload.y={_autoReloadSettings.Normalized().Y}",
                 $"autoReload.width={_autoReloadSettings.Normalized().Width}",
@@ -3698,6 +3698,12 @@ namespace HD2_Helper
                 case Keys.S:
                     editor.SaveCurrentPresetFromHook();
                     break;
+                case Keys.Z:
+                    editor.UndoPresetEditFromHook();
+                    break;
+                case Keys.R:
+                    editor.RedoPresetEditFromHook();
+                    break;
                 case Keys.Back:
                     editor.InsertTextFromHook(1, "");
                     break;
@@ -3755,7 +3761,8 @@ namespace HD2_Helper
                 return true;
 
             if (ctrl)
-                return vkCode is (uint)Keys.A or (uint)Keys.C or (uint)Keys.V or (uint)Keys.X or (uint)Keys.S or (uint)Keys.Back;
+                return vkCode is (uint)Keys.A or (uint)Keys.C or (uint)Keys.V or (uint)Keys.X
+                    or (uint)Keys.S or (uint)Keys.Z or (uint)Keys.R or (uint)Keys.Back;
 
             return (vkCode >= (uint)Keys.A && vkCode <= (uint)Keys.Z)
                 || (vkCode >= (uint)Keys.D0 && vkCode <= (uint)Keys.D9)
@@ -7215,6 +7222,18 @@ namespace HD2_Helper
                 RunEditorInputScript("(() => window.hd2SaveCurrentPresetFromHook?.() ?? false)();");
             }
 
+            public void UndoPresetEditFromHook()
+            {
+                // F3은 게임 포커스를 유지하므로 Ctrl+Z를 WebView의 프리셋별 실행 취소로 직접 전달한다.
+                RunEditorInputScript("(() => window.hd2UndoPresetEdit?.() ?? false)();");
+            }
+
+            public void RedoPresetEditFromHook()
+            {
+                // Ctrl+R도 같은 프리셋 조합에 저장된 되돌리기 기록만 다시 적용한다.
+                RunEditorInputScript("(() => window.hd2RedoPresetEdit?.() ?? false)();");
+            }
+
             private void RunEditorInputScript(string script)
             {
                 if (IsDisposed || webView.CoreWebView2 == null)
@@ -7743,13 +7762,25 @@ namespace HD2_Helper
             }
         }
 
+        private static bool IsLegacyAutoReloadDefault(AutoReloadSettings settings)
+        {
+            AutoReloadSettings normalized = settings.Normalized();
+            // 초기 제공값과 정확히 같은 경우에만 자동 이전한다. 개별 보정값은 사용자가 의도한 값으로 본다.
+            return normalized.X == 800
+                && normalized.Y == 800
+                && normalized.Width == 300
+                && normalized.Height == 200
+                && normalized.BorderThickness == 2
+                && normalized.MinimumPromptMatches == 1;
+        }
+
         public class AutoReloadSettings
         {
             // 1920x1080 기준 중앙의 "탭 R : 무기 장전" 안내가 HUD 커브 값에 따라 위아래로 움직이는 범위다.
             public int X { get; set; } = 800;
-            public int Y { get; set; } = 800;
+            public int Y { get; set; } = 700;
             public int Width { get; set; } = 300;
-            public int Height { get; set; } = 200;
+            public int Height { get; set; } = 300;
             public int BorderThickness { get; set; } = 2;
             public int MinimumPromptMatches { get; set; } = 1;
 
@@ -7969,7 +8000,7 @@ namespace HD2_Helper
                     "자동 재장전 인식 설정" + Environment.NewLine +
                     $"x={value.X}, y={value.Y}, width={value.Width}, height={value.Height}, border={value.BorderThickness}, minimumPromptMatches={value.MinimumPromptMatches}" + Environment.NewLine + Environment.NewLine +
                     "settings.ini" + Environment.NewLine +
-                    "autoReload.promptRegionVersion=2" + Environment.NewLine +
+                    "autoReload.promptRegionVersion=3" + Environment.NewLine +
                     $"autoReload.x={value.X}" + Environment.NewLine +
                     $"autoReload.y={value.Y}" + Environment.NewLine +
                     $"autoReload.width={value.Width}" + Environment.NewLine +

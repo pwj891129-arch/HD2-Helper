@@ -589,6 +589,7 @@ namespace HD2_Helper
             LoadCrosshairSettings();
             LoadSupportWeaponSettings();
             _supportWeaponMode = _supportWeaponSettings.Normalized().Mode;
+            RestoreRuntimeLoadoutFromSavedPresets();
 
             // 입력 처리
             this.Shown += (s, e) => EnsureInputHook();
@@ -617,6 +618,100 @@ namespace HD2_Helper
 
             // 웹뷰
             InitializeWebView();
+        }
+
+        private void RestoreRuntimeLoadoutFromSavedPresets()
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(LoadPresetsJson());
+                JsonElement root = document.RootElement;
+                JsonElement stratagemPresets = GetStratagemPresetsElement(root);
+                JsonElement selectedStratagemPreset = default;
+
+                if (stratagemPresets.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (JsonElement preset in stratagemPresets.EnumerateArray())
+                    {
+                        string id = preset.TryGetProperty("id", out JsonElement idElement) ? idElement.GetString() ?? "" : "";
+                        if (selectedStratagemPreset.ValueKind == JsonValueKind.Undefined)
+                            selectedStratagemPreset = preset;
+                        if (string.Equals(id, _selectedPresetId, StringComparison.Ordinal))
+                        {
+                            selectedStratagemPreset = preset;
+                            break;
+                        }
+                    }
+                }
+
+                if (selectedStratagemPreset.ValueKind == JsonValueKind.Object)
+                {
+                    string restoredId = selectedStratagemPreset.TryGetProperty("id", out JsonElement idElement)
+                        ? idElement.GetString() ?? ""
+                        : "";
+                    _selectedPresetId = restoredId;
+
+                    // WebView가 준비되기 전에도 자동선택 단축키가 바로 현재 스트라타젬 프리셋을 쓸 수 있게 런타임 슬롯을 채운다.
+                    var loadout = PresetLoadout.FromJson(
+                        selectedStratagemPreset.TryGetProperty("loadout", out JsonElement loadoutElement) ? loadoutElement : default);
+                    _currentSlots = loadout.Stratagems
+                        .Concat(Enumerable.Repeat("", StratagemSlotCount))
+                        .Take(StratagemSlotCount)
+                        .Select(EmptyToNull)
+                        .ToArray();
+                    _overlaySlotVisibility = selectedStratagemPreset.TryGetProperty("overlaySlots", out JsonElement overlaySlotsElement)
+                        ? ReadOverlaySlotVisibility(overlaySlotsElement)
+                        : CreateDefaultOverlaySlotVisibility();
+                    ApplyPresetSupportWeaponSettings(ReadPresetSupportWeaponSettings(selectedStratagemPreset, _supportWeaponSettings));
+
+                    // 스트라타젬 프리셋의 연결 장비를 우선하고, 연결값이 없는 이전 저장본은 마지막 장비 프리셋을 사용한다.
+                    string linkedEquipmentPresetId = selectedStratagemPreset.TryGetProperty("equipmentPresetId", out JsonElement linkedEquipmentElement)
+                        ? linkedEquipmentElement.GetString() ?? ""
+                        : "";
+                    if (!string.IsNullOrWhiteSpace(linkedEquipmentPresetId))
+                        _selectedEquipmentPresetId = linkedEquipmentPresetId;
+                }
+
+                JsonElement equipmentPresets = GetEquipmentPresetsElement(root);
+                JsonElement selectedEquipmentPreset = default;
+                if (equipmentPresets.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (JsonElement preset in equipmentPresets.EnumerateArray())
+                    {
+                        string id = preset.TryGetProperty("id", out JsonElement idElement) ? idElement.GetString() ?? "" : "";
+                        if (selectedEquipmentPreset.ValueKind == JsonValueKind.Undefined)
+                            selectedEquipmentPreset = preset;
+                        if (string.Equals(id, _selectedEquipmentPresetId, StringComparison.Ordinal))
+                        {
+                            selectedEquipmentPreset = preset;
+                            break;
+                        }
+                    }
+                }
+
+                if (selectedEquipmentPreset.ValueKind == JsonValueKind.Object)
+                {
+                    _selectedEquipmentPresetId = selectedEquipmentPreset.TryGetProperty("id", out JsonElement idElement)
+                        ? idElement.GetString() ?? ""
+                        : "";
+                    var equipment = PresetLoadout.FromJson(
+                        selectedEquipmentPreset.TryGetProperty("loadout", out JsonElement loadoutElement) ? loadoutElement : default);
+                    _currentLoadoutSlots = new[]
+                    {
+                        EmptyToNull(equipment.Armor),
+                        EmptyToNull(equipment.Primary),
+                        EmptyToNull(equipment.Secondary),
+                        EmptyToNull(equipment.Grenade)
+                    };
+                }
+
+                // 선택 ID가 삭제된 프리셋을 가리킨 경우 첫 프리셋으로 바로잡은 값을 다음 실행에도 유지한다.
+                SaveSetting();
+            }
+            catch
+            {
+                // 프리셋 파일이 손상됐더라도 기존 빈 상태로 실행해 수동 복구를 막지 않는다.
+            }
         }
 
         private void EmbedIntoUpdaterHost()
@@ -2391,8 +2486,8 @@ namespace HD2_Helper
 
         private async Task TryTriggerAutoReloadAfterPrimaryReleaseAsync()
         {
-            // 발사키를 놓은 직후에는 게임 HUD가 갱신되는 시간을 짧게 준 뒤 같은 안내를 한 번 더 확인한다.
-            await Task.Delay(100);
+            // 발사키를 놓은 뒤 HUD가 안정적으로 장전 안내를 표시할 수 있도록 0.15초 후 재확인한다.
+            await Task.Delay(150);
             await TryTriggerAutoReloadFromPrimaryAttackAsync();
         }
 

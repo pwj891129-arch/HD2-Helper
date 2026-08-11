@@ -1831,8 +1831,8 @@ namespace HD2_Helper
                 }
                 else if (key.Equals("autoReload.promptRegionVersion", StringComparison.OrdinalIgnoreCase))
                 {
-                    // 이전 좌하단 HUD 보정값은 중앙 장전 안내 영역과 호환되지 않아 한 번만 새 기본값으로 교체한다.
-                    loadedAutoReloadPromptRegion = int.TryParse(value, out int version) && version >= 1;
+                    // 2 이전 값은 HUD 커브에 맞춘 중앙 장전 안내 영역보다 위쪽에 있어, 한 번만 새 기준값으로 교체한다.
+                    loadedAutoReloadPromptRegion = int.TryParse(value, out int version) && version >= 2;
                 }
                 else if (key.StartsWith("autoReload.", StringComparison.OrdinalIgnoreCase)
                     && int.TryParse(value, out int autoReloadValue))
@@ -1907,7 +1907,7 @@ namespace HD2_Helper
 
             if (!loadedAutoReloadPromptRegion)
             {
-                // 구버전의 좌하단 빨간 HUD 보정값은 현재 방식에서 의미가 없으므로 중앙 안내용 기본값을 사용한다.
+                // 구버전의 좌하단 HUD 또는 이전 중앙 보정값은 현재 안내 위치와 다르므로 새 기본값을 사용한다.
                 _autoReloadSettings = new AutoReloadSettings();
             }
 
@@ -1936,7 +1936,7 @@ namespace HD2_Helper
                 $"muteGameAudioWhenInactive={(_muteGameAudioWhenInactive ? 1 : 0)}",
                 $"excludeOverlaysFromCapture={(_excludeOverlaysFromCapture ? 1 : 0)}",
                 $"autoReloadEnabled={(_autoReloadEnabled ? 1 : 0)}",
-                $"autoReload.promptRegionVersion=1",
+                $"autoReload.promptRegionVersion=2",
                 $"autoReload.x={_autoReloadSettings.Normalized().X}",
                 $"autoReload.y={_autoReloadSettings.Normalized().Y}",
                 $"autoReload.width={_autoReloadSettings.Normalized().Width}",
@@ -3383,13 +3383,13 @@ namespace HD2_Helper
                 {
                     if (e.IsDown)
                     {
-                        // 발사키를 누른 직후의 빈 탄창 안내를 즉시 확인한다.
-                        _ = TryTriggerAutoReloadFromPrimaryAttackAsync();
+                        // 저수준 마우스 훅에서 화면 캡처를 바로 실행하면 클릭 자체가 밀릴 수 있어, 감지는 별도 작업으로 넘긴다.
+                        _ = Task.Run(TryTriggerAutoReloadFromPrimaryAttackAsync);
                     }
                     else
                     {
-                        // 발사키 해제 후 HUD가 한 프레임 갱신된 시점에도 한 번 더 확인한다.
-                        _ = TryTriggerAutoReloadAfterPrimaryReleaseAsync();
+                        // 해제 후 HUD 갱신 확인도 훅 콜백을 점유하지 않도록 같은 작업 큐에서 처리한다.
+                        _ = Task.Run(TryTriggerAutoReloadAfterPrimaryReleaseAsync);
                     }
                 }
             }
@@ -4424,30 +4424,97 @@ namespace HD2_Helper
 
             try
             {
-                var ocrSettings = new OcrRegionSettings
+                using var capture = new Bitmap(region.Width, region.Height, PixelFormat.Format32bppArgb);
+                using (Graphics graphics = Graphics.FromImage(capture))
                 {
-                    X = settings.X,
-                    Y = settings.Y,
-                    Width = settings.Width,
-                    Height = settings.Height,
-                    BorderThickness = settings.BorderThickness
-                };
-                string rawText = await ReadOcrTextFromRegion("자동재장전", ocrSettings);
+                    // 전체 화면이나 파일을 만들지 않고, 보정된 300x200 정도의 안내 영역만 메모리에서 읽는다.
+                    graphics.CopyFromScreen(region.Left, region.Top, 0, 0, capture.Size);
+                }
+
+                if (overrideSettings == null && !HasReloadPromptVisualCandidate(capture))
+                {
+                    // 일반 발사 중에는 OCR을 시작하지 않아, 안내가 없을 때의 프레임 비용을 아주 작게 유지한다.
+                    return new AutoReloadDetectionResult(false, 0, settings.MinimumPromptMatches, "", region, "장전 안내 형태가 없어 OCR을 생략했습니다.");
+                }
+
+                string rawText = await ReadOcrTextFromBitmap(capture, "자동재장전");
                 string scanText = CleanScanText(rawText);
+                bool hasKoreanReloadPrompt = scanText.Contains("무기장전", StringComparison.Ordinal);
+                bool hasEnglishReloadPrompt = scanText.Contains("RELOAD", StringComparison.Ordinal);
                 int matchedKeywords = 0;
 
-                // 한국어 UI의 "무기 장전"을 기본으로 보고, 영어 UI의 RELOAD도 같은 의미로 처리한다.
-                if (scanText.Contains("무기", StringComparison.Ordinal)) matchedKeywords++;
-                if (scanText.Contains("장전", StringComparison.Ordinal)) matchedKeywords++;
-                if (scanText.Contains("RELOAD", StringComparison.Ordinal)) matchedKeywords += 2;
+                // 공백이나 OCR 줄바꿈 때문에 "무기 장전"이 쪼개져도 하나의 확정 문구로 처리한다.
+                if (hasKoreanReloadPrompt) matchedKeywords = 2;
+                else
+                {
+                    if (scanText.Contains("무기", StringComparison.Ordinal)) matchedKeywords++;
+                    if (scanText.Contains("장전", StringComparison.Ordinal)) matchedKeywords++;
+                    if (hasEnglishReloadPrompt) matchedKeywords += 2;
+                }
 
-                bool isReloadPrompt = matchedKeywords >= settings.MinimumPromptMatches;
+                bool isReloadPrompt = hasKoreanReloadPrompt || hasEnglishReloadPrompt || matchedKeywords >= settings.MinimumPromptMatches;
                 string note = isReloadPrompt ? "중앙 무기 장전 안내 확인" : "중앙 장전 안내를 찾지 못했습니다.";
                 return new AutoReloadDetectionResult(isReloadPrompt, matchedKeywords, settings.MinimumPromptMatches, rawText, region, note);
             }
             catch
             {
                 return AutoReloadDetectionResult.Empty with { Note = "화면 캡처에 실패했습니다." };
+            }
+        }
+
+        private static bool HasReloadPromptVisualCandidate(Bitmap capture)
+        {
+            // 장전 안내는 밝고 채도가 낮은 글자와 모서리로 구성된다. OCR 전 이 특성만 빠르게 확인한다.
+            BitmapData? data = null;
+            try
+            {
+                data = capture.LockBits(new Rectangle(0, 0, capture.Width, capture.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+                int stride = Math.Abs(data.Stride);
+                byte[] pixels = new byte[stride * capture.Height];
+                Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
+
+                int brightPixels = 0;
+                int occupiedRows = 0;
+                int occupiedColumns = 0;
+                var columnHits = new int[capture.Width];
+
+                for (int y = 0; y < capture.Height; y++)
+                {
+                    int rowHits = 0;
+                    for (int x = 0; x < capture.Width; x++)
+                    {
+                        int index = (y * stride) + (x * 4);
+                        int blue = pixels[index];
+                        int green = pixels[index + 1];
+                        int red = pixels[index + 2];
+                        int maximum = Math.Max(red, Math.Max(green, blue));
+                        int minimum = Math.Min(red, Math.Min(green, blue));
+
+                        if (minimum < 150 || maximum - minimum > 70)
+                            continue;
+
+                        brightPixels++;
+                        rowHits++;
+                        columnHits[x]++;
+                    }
+
+                    if (rowHits >= 4)
+                        occupiedRows++;
+                }
+
+                foreach (int hits in columnHits)
+                {
+                    if (hits >= 2)
+                        occupiedColumns++;
+                }
+
+                // 가는 체력선이나 밝은 배경은 제외하고, 글자와 테두리처럼 여러 행·열을 차지한 경우만 OCR로 넘긴다.
+                return brightPixels >= 180 && occupiedRows >= 10 && occupiedColumns >= 24;
+            }
+            finally
+            {
+                if (data != null)
+                    capture.UnlockBits(data);
             }
         }
 
@@ -4511,10 +4578,16 @@ namespace HD2_Helper
                 g.CopyFromScreen(region.Left, region.Top, 0, 0, cap.Size);
             }
 
-            // 자동선택 OCR과 같은 전처리로 흰 UI 글자를 검출해 테스트 결과와 실제 판독 결과를 맞춘다.
-            double scale = targetType == "스트라타젬" ? 4.5 : 3.5;
-            double radius = targetType == "스트라타젬" ? 1.8 : 3.95;
-            int pad = 90;
+            return await ReadOcrTextFromBitmap(cap, targetType);
+        }
+
+        private async Task<string> ReadOcrTextFromBitmap(Bitmap cap, string targetType)
+        {
+            bool isAutoReloadPrompt = targetType.Equals("자동재장전", StringComparison.Ordinal);
+            // 장전 안내는 짧고 선명한 문구라 과한 확대·팽창 처리가 오히려 프레임을 떨어뜨린다.
+            double scale = isAutoReloadPrompt ? 2.2 : targetType == "스트라타젬" ? 4.5 : 3.5;
+            double radius = isAutoReloadPrompt ? 1.1 : targetType == "스트라타젬" ? 1.8 : 3.95;
+            int pad = isAutoReloadPrompt ? 24 : 90;
 
             int resizedW = (int)Math.Round(cap.Width * scale);
             int resizedH = (int)Math.Round(cap.Height * scale);
@@ -7578,12 +7651,12 @@ namespace HD2_Helper
         public class AutoReloadSettings
         {
             // 1920x1080 기준 중앙의 "탭 R : 무기 장전" 안내가 HUD 커브 값에 따라 위아래로 움직이는 범위다.
-            public int X { get; set; } = 820;
-            public int Y { get; set; } = 0;
-            public int Width { get; set; } = 360;
-            public int Height { get; set; } = 230;
+            public int X { get; set; } = 800;
+            public int Y { get; set; } = 800;
+            public int Width { get; set; } = 300;
+            public int Height { get; set; } = 200;
             public int BorderThickness { get; set; } = 2;
-            public int MinimumPromptMatches { get; set; } = 2;
+            public int MinimumPromptMatches { get; set; } = 1;
 
             public AutoReloadSettings Clone() => new()
             {
@@ -7801,7 +7874,7 @@ namespace HD2_Helper
                     "자동 재장전 인식 설정" + Environment.NewLine +
                     $"x={value.X}, y={value.Y}, width={value.Width}, height={value.Height}, border={value.BorderThickness}, minimumPromptMatches={value.MinimumPromptMatches}" + Environment.NewLine + Environment.NewLine +
                     "settings.ini" + Environment.NewLine +
-                    "autoReload.promptRegionVersion=1" + Environment.NewLine +
+                    "autoReload.promptRegionVersion=2" + Environment.NewLine +
                     $"autoReload.x={value.X}" + Environment.NewLine +
                     $"autoReload.y={value.Y}" + Environment.NewLine +
                     $"autoReload.width={value.Width}" + Environment.NewLine +

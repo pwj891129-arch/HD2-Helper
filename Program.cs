@@ -144,8 +144,10 @@ namespace HD2_Helper
         private SupportWeaponGaugeForm? _supportWeaponGaugeForm;
         private CrosshairEditorForm? _crosshairEditorForm;
         private OcrRegionSettingsForm? _ocrRegionSettingsForm;
+        private AutoReloadCalibrationForm? _autoReloadCalibrationForm;
         private System.Windows.Forms.Timer? _crosshairTimer;
         private System.Windows.Forms.Timer? _supportWeaponGaugeTimer;
+        private System.Windows.Forms.Timer? _autoReloadDetectionTimer;
         private System.Windows.Forms.Timer? _inactiveGameAudioMuteTimer;
         private System.Windows.Forms.Timer? _softwareCursorTimer;
         private CancellationTokenSource? _padLoopCts;
@@ -214,6 +216,8 @@ namespace HD2_Helper
         private static uint _crosshairToggleKey = 0;
         private static uint _helperEditorKey = (uint)Keys.F3;
         private static uint _presetOverlayKey = (uint)Keys.F4;
+        // 지원무기 보조 모드는 Alt와 조합해 쓰므로 기본 키만 보관하고, 기본 조합은 Alt+3이다.
+        private static uint _supportWeaponModeKey = (uint)Keys.D3;
         private static uint _chatKey = (uint)Keys.Enter;
         private static bool _stratagemCompactLayout;
         // 장비 선택창은 새 그리드형과 기존 목록형 중 사용자가 고른 형태를 모든 WebView에 동일하게 적용한다.
@@ -229,6 +233,9 @@ namespace HD2_Helper
         private static bool _pauseGamepadLoop;
         private static bool _muteGameAudioWhenInactive;
         private static bool _excludeOverlaysFromCapture;
+        // 기본 OFF: 주무기 탄창이 비어 빨간 UI가 깜빡일 때만 공격 입력에 재장전을 보조한다.
+        private static bool _autoReloadEnabled;
+        private static AutoReloadSettings _autoReloadSettings = new();
         private static string _selectedPresetId = "";
         // 스트라타젬과 장비는 독립적으로 조합할 수 있으므로 마지막 선택값도 각각 보존한다.
         private static string _selectedEquipmentPresetId = "";
@@ -274,6 +281,9 @@ namespace HD2_Helper
         private DateTime _supportWeaponModeMessageUntil = DateTime.MinValue;
         private bool? _lastObservedGameActive;
         private readonly Dictionary<string, bool> _gameAudioMuteStatesBeforeHelper = new();
+        private DateTime _lastAutoReloadRedSeenAt = DateTime.MinValue;
+        private DateTime _lastAutoReloadAttemptAt = DateTime.MinValue;
+        private AutoReloadDetectionResult _lastAutoReloadDetection = AutoReloadDetectionResult.Empty;
 
         public class InputEventArgs : EventArgs
         {
@@ -602,6 +612,7 @@ namespace HD2_Helper
 
             // 조준점
             InitializeCrosshairOverlay();
+            InitializeAutoReloadDetection();
             InitializeInactiveGameAudioMute();
             InitializeSoftwareCursorOverlay();
 
@@ -1195,6 +1206,22 @@ namespace HD2_Helper
                         SendSettingsToWeb();
                     }
                 }
+                else if (type == "SET_AUTO_RELOAD_ENABLED")
+                {
+                    if (doc.RootElement.TryGetProperty("enabled", out var enabledElement))
+                    {
+                        // 자동 재장전은 사용자가 명시적으로 켠 경우에만 주무기 HUD 감지를 시작한다.
+                        _autoReloadEnabled = enabledElement.GetBoolean();
+                        _lastAutoReloadRedSeenAt = DateTime.MinValue;
+                        if (_autoReloadDetectionTimer != null)
+                        {
+                            if (_autoReloadEnabled) _autoReloadDetectionTimer.Start();
+                            else _autoReloadDetectionTimer.Stop();
+                        }
+                        SaveSetting();
+                        SendSettingsToWeb();
+                    }
+                }
                 else if (type == "SET_SETTINGS_PANEL_COLLAPSED")
                 {
                     if (doc.RootElement.TryGetProperty("collapsed", out var collapsedElement))
@@ -1337,6 +1364,10 @@ namespace HD2_Helper
                 else if (type == "OPEN_OCR_REGION_SETTINGS")
                 {
                     OpenOcrRegionSettings();
+                }
+                else if (type == "OPEN_AUTO_RELOAD_CALIBRATION")
+                {
+                    OpenAutoReloadCalibration();
                 }
                 else if (type == "OPEN_PRESET_OVERLAY")
                 {
@@ -1794,6 +1825,17 @@ namespace HD2_Helper
                     if (!uint.TryParse(value, out uint vk)) continue;
                     _excludeOverlaysFromCapture = vk != 0;
                 }
+                else if (key.Equals("autoReloadEnabled", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!uint.TryParse(value, out uint vk)) continue;
+                    _autoReloadEnabled = vk != 0;
+                }
+                else if (key.StartsWith("autoReload.", StringComparison.OrdinalIgnoreCase)
+                    && int.TryParse(value, out int autoReloadValue))
+                {
+                    // 주무기 탄창 감지값은 OCR 영역과 별개로 보관해, 화면 보정이 서로 영향을 주지 않게 한다.
+                    _autoReloadSettings = _autoReloadSettings.WithProperty(key["autoReload.".Length..], autoReloadValue).Normalized();
+                }
                 else if (TryGetManualStratagemDirection(key, out string manualDirection))
                 {
                     if (!uint.TryParse(value, out uint vk)) continue;
@@ -1836,6 +1878,11 @@ namespace HD2_Helper
                 {
                     if (!uint.TryParse(value, out uint vk)) continue;
                     _presetOverlayKey = vk;
+                }
+                else if (key.Equals("supportWeaponModeKey", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!uint.TryParse(value, out uint vk)) continue;
+                    _supportWeaponModeKey = vk;
                 }
                 else if (TryParseOcrRegionSettingKey(key, out string? ocrType, out string? property)
                     && ocrType != null
@@ -1883,6 +1930,13 @@ namespace HD2_Helper
                 $"pauseGamepadLoop={(_pauseGamepadLoop ? 1 : 0)}",
                 $"muteGameAudioWhenInactive={(_muteGameAudioWhenInactive ? 1 : 0)}",
                 $"excludeOverlaysFromCapture={(_excludeOverlaysFromCapture ? 1 : 0)}",
+                $"autoReloadEnabled={(_autoReloadEnabled ? 1 : 0)}",
+                $"autoReload.x={_autoReloadSettings.Normalized().X}",
+                $"autoReload.y={_autoReloadSettings.Normalized().Y}",
+                $"autoReload.width={_autoReloadSettings.Normalized().Width}",
+                $"autoReload.height={_autoReloadSettings.Normalized().Height}",
+                $"autoReload.border={_autoReloadSettings.Normalized().BorderThickness}",
+                $"autoReload.minRedPixels={_autoReloadSettings.Normalized().MinRedPixels}",
                 $"manualStratagemStartKey={GetManualStratagemKey("start")}",
                 $"manualStratagemUpKey={GetManualStratagemKey("up")}",
                 $"manualStratagemDownKey={GetManualStratagemKey("down")}",
@@ -1895,6 +1949,7 @@ namespace HD2_Helper
                 $"crosshairToggleKey={_crosshairToggleKey}",
                 $"helperEditorKey={_helperEditorKey}",
                 $"presetOverlayKey={_presetOverlayKey}",
+                $"supportWeaponModeKey={_supportWeaponModeKey}",
                 // 두 종류 프리셋의 선택을 따로 저장해 재실행 후에도 같은 조합을 복원한다.
                 $"selectedPresetId={_selectedPresetId}",
                 $"selectedEquipmentPresetId={_selectedEquipmentPresetId}"
@@ -1922,7 +1977,7 @@ namespace HD2_Helper
         {
             if (string.IsNullOrWhiteSpace(target)) return false;
             if (TryGetManualStratagemDirection(target, out _)) return true;
-            if (target is "autoSelectKey" or "overlayKey" or "reinforceKey" or "stratagemComboKey" or "crosshairToggleKey" or "helperEditorKey" or "presetOverlayKey") return true;
+            if (target is "autoSelectKey" or "overlayKey" or "reinforceKey" or "stratagemComboKey" or "crosshairToggleKey" or "helperEditorKey" or "presetOverlayKey" or "supportWeaponModeKey") return true;
             return target.StartsWith("slot", StringComparison.OrdinalIgnoreCase)
                 && int.TryParse(target[4..], out int slot)
                 && slot >= 1
@@ -1977,6 +2032,7 @@ namespace HD2_Helper
             else if (target == "crosshairToggleKey") _crosshairToggleKey = 0;
             else if (target == "helperEditorKey") _helperEditorKey = 0;
             else if (target == "presetOverlayKey") _presetOverlayKey = 0;
+            else if (target == "supportWeaponModeKey") _supportWeaponModeKey = 0;
             else if (target!.StartsWith("slot", StringComparison.OrdinalIgnoreCase)
                 && int.TryParse(target[4..], out int slot)
                 && slot >= 1
@@ -2021,6 +2077,15 @@ namespace HD2_Helper
                     _manualStratagemKey[manualDirection] = vkCode;
                 }
 
+                SaveSetting();
+                SendSettingsToWeb();
+                return;
+            }
+
+            if (target == "supportWeaponModeKey")
+            {
+                // 모드 전환은 항상 Alt와 조합하므로 일반 단축키와 같은 숫자/키를 써도 충돌하지 않는다.
+                _supportWeaponModeKey = vkCode;
                 SaveSetting();
                 SendSettingsToWeb();
                 return;
@@ -2128,6 +2193,7 @@ namespace HD2_Helper
                 },
                 muteGameAudioWhenInactive = _muteGameAudioWhenInactive,
                 excludeOverlaysFromCapture = _excludeOverlaysFromCapture,
+                autoReloadEnabled = _autoReloadEnabled,
                 selectedPresetId = _selectedPresetId,
                 selectedEquipmentPresetId = _selectedEquipmentPresetId,
                 crosshair = _crosshairSettings.Normalized(),
@@ -2147,6 +2213,11 @@ namespace HD2_Helper
                     crosshairToggleKey = new { value = _crosshairToggleKey, name = GetKeyName(_crosshairToggleKey) },
                     helperEditorKey = new { value = _helperEditorKey, name = GetKeyName(_helperEditorKey) },
                     presetOverlayKey = new { value = _presetOverlayKey, name = GetKeyName(_presetOverlayKey) },
+                    supportWeaponModeKey = new
+                    {
+                        value = _supportWeaponModeKey,
+                        name = _supportWeaponModeKey == 0 ? "없음" : $"Alt+{GetKeyName(_supportWeaponModeKey)}"
+                    },
                     slots = slotKeys
                 }
             };
@@ -2288,6 +2359,68 @@ namespace HD2_Helper
                 RefreshSupportWeaponGaugeTimerState();
             };
             RefreshSupportWeaponGaugeTimerState();
+        }
+
+        private void InitializeAutoReloadDetection()
+        {
+            // 별도 감지 타이머는 자동 재장전이 켜진 경우에만 작은 주무기 영역을 캡처한다.
+            _autoReloadDetectionTimer = new System.Windows.Forms.Timer { Interval = 120 };
+            _autoReloadDetectionTimer.Tick += (_, _) => UpdateAutoReloadDetection();
+            if (_autoReloadEnabled)
+                _autoReloadDetectionTimer.Start();
+        }
+
+        private void UpdateAutoReloadDetection()
+        {
+            if (!_autoReloadEnabled || !IsGameActive() || _isChat)
+            {
+                _lastAutoReloadRedSeenAt = DateTime.MinValue;
+                return;
+            }
+
+            AutoReloadDetectionResult result = DetectEmptyPrimaryWeapon();
+            _lastAutoReloadDetection = result;
+            DateTime now = DateTime.UtcNow;
+
+            if (result.IsEmpty)
+            {
+                // HUD가 깜빡이는 프레임 사이에도 잠깐 상태를 유지해 공격 입력과 놓치지 않게 한다.
+                _lastAutoReloadRedSeenAt = now;
+            }
+            else if (now - _lastAutoReloadRedSeenAt > TimeSpan.FromMilliseconds(500))
+            {
+                _lastAutoReloadRedSeenAt = DateTime.MinValue;
+            }
+        }
+
+        private void TryTriggerAutoReloadFromPrimaryAttack()
+        {
+            if (!_autoReloadEnabled || !IsGameActive() || _isChat)
+                return;
+
+            DateTime now = DateTime.UtcNow;
+            bool recentlyDetectedEmpty = now - _lastAutoReloadRedSeenAt <= TimeSpan.FromMilliseconds(500);
+            if (!recentlyDetectedEmpty || now - _lastAutoReloadAttemptAt < TimeSpan.FromSeconds(1))
+                return;
+
+            // 재장전은 공격 입력을 막지 않고, 비어 있는 주무기를 쏘려는 순간에만 추가로 탭한다.
+            // 쿨타임 시점은 여기서가 아니라 실제 R 입력을 주입한 뒤에만 기록한다.
+            TriggerAutoReloadTap();
+        }
+
+        private async void TriggerAutoReloadTap()
+        {
+            try
+            {
+                SendInput((uint)Keys.R, true);
+                // 실제 재장전 명령을 보낸 뒤부터만 1초 재시도 제한을 적용한다.
+                _lastAutoReloadAttemptAt = DateTime.UtcNow;
+                await Task.Delay(Math.Min(Math.Max(_inputDelay, 25), 60));
+            }
+            finally
+            {
+                SendInput((uint)Keys.R, false);
+            }
         }
 
         private void InitializeSoftwareCursorOverlay()
@@ -2607,17 +2740,17 @@ namespace HD2_Helper
 
         private bool TryHandleSupportWeaponShortcut(uint vkCode)
         {
-            if (vkCode is not (uint)Keys.D3 and not (uint)Keys.NumPad3)
+            if (_supportWeaponModeKey == 0 || vkCode != _supportWeaponModeKey)
                 return false;
 
             if (!IsGameActive())
                 return false;
 
-            bool ctrl = IsPhysicalKeyDown(Keys.ControlKey) || IsPhysicalKeyDown(Keys.LControlKey) || IsPhysicalKeyDown(Keys.RControlKey);
+            bool alt = IsPhysicalKeyDown(Keys.Menu) || IsPhysicalKeyDown(Keys.LMenu) || IsPhysicalKeyDown(Keys.RMenu);
 
-            if (ctrl)
+            if (alt)
             {
-                // Ctrl+3은 지원무기 종류 교체 대신 보조 기능 모드를 순환한다.
+                // Alt+설정키는 지원무기 종류 교체 대신 보조 기능 모드를 순환한다.
                 _supportWeaponMode = _supportWeaponMode switch
                 {
                     "Off" => "AutoFire",
@@ -2628,7 +2761,7 @@ namespace HD2_Helper
                 _supportWeaponSettings = _supportWeaponSettings.Normalized();
                 _supportWeaponSettings.Mode = _supportWeaponMode;
 
-                // Ctrl+3 모드 전환은 전투 중 임시 변경으로만 취급한다. 프리셋 저장 버튼/Ctrl+S를 누르기 전까지 디스크에는 남기지 않는다.
+                // 모드 전환은 전투 중 임시 변경으로만 취급한다. 프리셋 저장 버튼/Ctrl+S를 누르기 전까지 디스크에는 남기지 않는다.
                 ShowSupportWeaponModeMessage($"지원무기 기능: {GetSupportWeaponModeDisplayName(_supportWeaponMode)}");
                 return true;
             }
@@ -3035,6 +3168,48 @@ namespace HD2_Helper
             _ocrRegionSettingsForm.Activate();
         }
 
+        private void OpenAutoReloadCalibration()
+        {
+            if (_autoReloadCalibrationForm == null || _autoReloadCalibrationForm.IsDisposed)
+            {
+                // 자동 재장전 감지기는 OCR과 독립된 픽셀 판독 모듈이라 전용 보정 창에서만 영역과 민감도를 다룬다.
+                _autoReloadCalibrationForm = new AutoReloadCalibrationForm(
+                    _autoReloadSettings,
+                    ApplyAutoReloadSettings,
+                    PreviewAutoReloadRegion,
+                    TestAutoReloadDetectionAsync);
+                _autoReloadCalibrationForm.FormClosed += (_, _) =>
+                {
+                    HideOcrRegionOverlay();
+                    _autoReloadCalibrationForm = null;
+                };
+            }
+
+            _autoReloadCalibrationForm.ApplySettings(_autoReloadSettings);
+            _autoReloadCalibrationForm.Show();
+            ApplyCaptureExclusion(_autoReloadCalibrationForm);
+            _autoReloadCalibrationForm.Activate();
+        }
+
+        private void ApplyAutoReloadSettings(AutoReloadSettings settings)
+        {
+            _autoReloadSettings = settings.Normalized();
+            SaveSetting();
+        }
+
+        private void PreviewAutoReloadRegion(AutoReloadSettings settings)
+        {
+            AutoReloadSettings normalized = settings.Normalized();
+            if (TryBuildGameScreenRect(normalized.X, normalized.Y, normalized.Width, normalized.Height, out Rectangle region))
+                // 실제 인식 중에는 표시하지 않고, 전용 보정 창을 열었을 때만 빨간 테두리로 대상 범위를 안내한다.
+                ShowOcrRegionOverlay(region, normalized.BorderThickness, null);
+        }
+
+        private Task<AutoReloadDetectionResult> TestAutoReloadDetectionAsync(AutoReloadSettings settings)
+        {
+            return Task.FromResult(DetectEmptyPrimaryWeapon(settings));
+        }
+
         private void ApplyOcrRegionSettings(Dictionary<string, OcrRegionSettings> settings)
         {
             // 조절창에서 바꾼 OCR 영역은 다음 자동선택부터 즉시 쓰이도록 메모리와 settings.ini에 저장한다.
@@ -3261,6 +3436,9 @@ namespace HD2_Helper
                 // 상시 갱신을 꺼도 실제 발사 입력이 시작되면 즉시 25ms 차지 계산을 시작하고, 해제 시 마지막 상태를 반영한다.
                 UpdateSupportWeaponGaugeOverlay();
                 RefreshSupportWeaponGaugeTimerState();
+
+                if (e.IsDown && !e.IsInjected)
+                    TryTriggerAutoReloadFromPrimaryAttack();
             }
 
             if (e.IsDown && vkCode == (uint)Keys.Escape && !e.IsInjected && TryCancelAutoSelection())
@@ -4288,6 +4466,66 @@ namespace HD2_Helper
             );
 
             return region.Width > 0 && region.Height > 0;
+        }
+
+        private static AutoReloadDetectionResult DetectEmptyPrimaryWeapon(AutoReloadSettings? overrideSettings = null)
+        {
+            AutoReloadSettings settings = (overrideSettings ?? _autoReloadSettings).Normalized();
+            if (!TryBuildGameScreenRect(settings.X, settings.Y, settings.Width, settings.Height, out Rectangle region))
+                return AutoReloadDetectionResult.Empty with { Note = "게임 창 또는 감지 영역을 찾지 못했습니다." };
+
+            try
+            {
+                using Bitmap capture = new(region.Width, region.Height, PixelFormat.Format32bppArgb);
+                using (Graphics graphics = Graphics.FromImage(capture))
+                    graphics.CopyFromScreen(region.Left, region.Top, 0, 0, capture.Size);
+
+                int brightRedPixels = CountBrightHudRedPixels(capture);
+                bool isEmpty = brightRedPixels >= settings.MinRedPixels;
+                return new AutoReloadDetectionResult(isEmpty, brightRedPixels, settings.MinRedPixels, region, "주무기 우측 HUD 영역");
+            }
+            catch
+            {
+                return AutoReloadDetectionResult.Empty with { Note = "화면 캡처에 실패했습니다." };
+            }
+        }
+
+        private static int CountBrightHudRedPixels(Bitmap bitmap)
+        {
+            Rectangle bounds = new(Point.Empty, bitmap.Size);
+            BitmapData? bitmapData = null;
+            try
+            {
+                bitmapData = bitmap.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+                int stride = Math.Abs(bitmapData.Stride);
+                byte[] bytes = new byte[stride * bitmap.Height];
+                Marshal.Copy(bitmapData.Scan0, bytes, 0, bytes.Length);
+
+                int redPixels = 0;
+                // UI 경고색은 밝고 채도가 높다. 반투명 패널 너머의 어두운 갈색/붉은 배경은 제외한다.
+                for (int y = 0; y < bitmap.Height; y += 2)
+                {
+                    int row = y * stride;
+                    for (int x = 0; x < bitmap.Width; x += 2)
+                    {
+                        int index = row + (x * 4);
+                        byte blue = bytes[index];
+                        byte green = bytes[index + 1];
+                        byte red = bytes[index + 2];
+
+                        if (red >= 150 && red >= green + 65 && red >= blue + 65 && green <= 125)
+                            redPixels++;
+                    }
+                }
+
+                // 두 칸 간격으로 표본을 읽었으므로 실제 밀도에 가까운 픽셀 수로 돌려준다.
+                return redPixels * 4;
+            }
+            finally
+            {
+                if (bitmapData != null)
+                    bitmap.UnlockBits(bitmapData);
+            }
         }
 
         private static bool TryGetGameClientRegion(out Rectangle region)
@@ -7403,6 +7641,239 @@ namespace HD2_Helper
                 }
 
                 return next;
+            }
+        }
+
+        public class AutoReloadSettings
+        {
+            // 1920x1080 기준 좌하단 HUD의 가장 오른쪽 주무기 영역이다. 왼쪽의 수류탄/배낭은 처음부터 포함하지 않는다.
+            public int X { get; set; } = 300;
+            public int Y { get; set; } = 875;
+            public int Width { get; set; } = 360;
+            public int Height { get; set; } = 190;
+            public int BorderThickness { get; set; } = 2;
+            public int MinRedPixels { get; set; } = 120;
+
+            public AutoReloadSettings Clone() => new()
+            {
+                X = X,
+                Y = Y,
+                Width = Width,
+                Height = Height,
+                BorderThickness = BorderThickness,
+                MinRedPixels = MinRedPixels
+            };
+
+            public AutoReloadSettings Normalized() => new()
+            {
+                X = Math.Clamp(X, 0, 1919),
+                Y = Math.Clamp(Y, 0, 1079),
+                Width = Math.Clamp(Width, 30, 800),
+                Height = Math.Clamp(Height, 30, 400),
+                BorderThickness = Math.Clamp(BorderThickness, 1, 12),
+                MinRedPixels = Math.Clamp(MinRedPixels, 20, 20000)
+            };
+
+            public AutoReloadSettings WithProperty(string property, int value)
+            {
+                AutoReloadSettings next = Clone();
+                switch (property.ToLowerInvariant())
+                {
+                    case "x": next.X = value; break;
+                    case "y": next.Y = value; break;
+                    case "width": next.Width = value; break;
+                    case "height": next.Height = value; break;
+                    case "border": next.BorderThickness = value; break;
+                    case "minredpixels": next.MinRedPixels = value; break;
+                }
+
+                return next;
+            }
+        }
+
+        private readonly record struct AutoReloadDetectionResult(
+            bool IsEmpty,
+            int BrightRedPixels,
+            int Threshold,
+            Rectangle Region,
+            string Note)
+        {
+            public static AutoReloadDetectionResult Empty => new(false, 0, 0, Rectangle.Empty, "대기 중");
+        }
+
+        private class AutoReloadCalibrationForm : Form
+        {
+            private readonly Action<AutoReloadSettings> onSettingsChanged;
+            private readonly Action<AutoReloadSettings> onPreviewChanged;
+            private readonly Func<AutoReloadSettings, Task<AutoReloadDetectionResult>> onTestRequested;
+            private readonly NumericUpDown xInput = new();
+            private readonly NumericUpDown yInput = new();
+            private readonly NumericUpDown widthInput = new();
+            private readonly NumericUpDown heightInput = new();
+            private readonly NumericUpDown borderInput = new();
+            private readonly NumericUpDown minRedPixelsInput = new();
+            private readonly Label testResult = new();
+            private AutoReloadSettings settings;
+            private bool loading;
+
+            public AutoReloadCalibrationForm(
+                AutoReloadSettings initialSettings,
+                Action<AutoReloadSettings> onSettingsChanged,
+                Action<AutoReloadSettings> onPreviewChanged,
+                Func<AutoReloadSettings, Task<AutoReloadDetectionResult>> onTestRequested)
+            {
+                this.onSettingsChanged = onSettingsChanged;
+                this.onPreviewChanged = onPreviewChanged;
+                this.onTestRequested = onTestRequested;
+                settings = initialSettings.Normalized();
+
+                Text = "자동 재장전 인식 보정";
+                ClientSize = new Size(470, 370);
+                MinimumSize = new Size(470, 370);
+                FormBorderStyle = FormBorderStyle.FixedDialog;
+                StartPosition = FormStartPosition.CenterScreen;
+                MaximizeBox = false;
+                MinimizeBox = false;
+                BackColor = Color.FromArgb(35, 35, 35);
+                ForeColor = Color.White;
+
+                BuildLayout();
+                ApplySettings(settings);
+            }
+
+            public void ApplySettings(AutoReloadSettings next)
+            {
+                loading = true;
+                settings = next.Normalized();
+                xInput.Value = settings.X;
+                yInput.Value = settings.Y;
+                widthInput.Value = settings.Width;
+                heightInput.Value = settings.Height;
+                borderInput.Value = settings.BorderThickness;
+                minRedPixelsInput.Value = settings.MinRedPixels;
+                loading = false;
+                onPreviewChanged(settings);
+            }
+
+            private void BuildLayout()
+            {
+                var root = new TableLayoutPanel
+                {
+                    Dock = DockStyle.Fill,
+                    Padding = new Padding(16),
+                    ColumnCount = 2,
+                    RowCount = 9,
+                    BackColor = BackColor
+                };
+                root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
+                root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
+                Controls.Add(root);
+
+                AddInputRow(root, 0, "좌우 위치", xInput, 0, 1919);
+                AddInputRow(root, 1, "상하 위치", yInput, 0, 1079);
+                AddInputRow(root, 2, "너비", widthInput, 30, 800);
+                AddInputRow(root, 3, "높이", heightInput, 30, 400);
+                AddInputRow(root, 4, "박스 굵기", borderInput, 1, 12);
+                AddInputRow(root, 5, "빨강 최소 픽셀", minRedPixelsInput, 20, 20000);
+
+                var testButton = CreateButton("테스트");
+                testButton.Click += async (_, _) => await RunTestAsync();
+                root.Controls.Add(testButton, 0, 6);
+
+                testResult.AutoSize = false;
+                testResult.Dock = DockStyle.Fill;
+                testResult.TextAlign = ContentAlignment.MiddleLeft;
+                testResult.ForeColor = Color.Gainsboro;
+                root.Controls.Add(testResult, 1, 6);
+
+                var resetButton = CreateButton("기본값");
+                resetButton.Click += (_, _) =>
+                {
+                    ApplySettings(new AutoReloadSettings());
+                    NotifyChanged();
+                };
+                root.Controls.Add(resetButton, 0, 7);
+
+                var copyButton = CreateButton("복사");
+                copyButton.Click += (_, _) => CopySettings();
+                root.Controls.Add(copyButton, 1, 7);
+
+                var closeButton = CreateButton("닫기");
+                closeButton.Click += (_, _) => Close();
+                root.SetColumnSpan(closeButton, 2);
+                root.Controls.Add(closeButton, 0, 8);
+            }
+
+            private void AddInputRow(TableLayoutPanel root, int row, string labelText, NumericUpDown input, int minimum, int maximum)
+            {
+                var label = new Label
+                {
+                    Text = labelText,
+                    Dock = DockStyle.Fill,
+                    TextAlign = ContentAlignment.MiddleLeft,
+                    ForeColor = Color.Gainsboro
+                };
+                root.Controls.Add(label, 0, row);
+
+                input.Dock = DockStyle.Fill;
+                input.Minimum = minimum;
+                input.Maximum = maximum;
+                input.BackColor = Color.FromArgb(25, 25, 25);
+                input.ForeColor = Color.White;
+                input.ValueChanged += (_, _) => NotifyChanged();
+                root.Controls.Add(input, 1, row);
+            }
+
+            private Button CreateButton(string text) => new()
+            {
+                Text = text,
+                Dock = DockStyle.Fill,
+                Height = 32,
+                BackColor = Color.FromArgb(45, 45, 45),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Margin = new Padding(4)
+            };
+
+            private void NotifyChanged()
+            {
+                if (loading) return;
+
+                settings = new AutoReloadSettings
+                {
+                    X = (int)xInput.Value,
+                    Y = (int)yInput.Value,
+                    Width = (int)widthInput.Value,
+                    Height = (int)heightInput.Value,
+                    BorderThickness = (int)borderInput.Value,
+                    MinRedPixels = (int)minRedPixelsInput.Value
+                }.Normalized();
+
+                onSettingsChanged(settings.Clone());
+                onPreviewChanged(settings);
+            }
+
+            private async Task RunTestAsync()
+            {
+                AutoReloadDetectionResult result = await onTestRequested(settings);
+                string state = result.IsEmpty ? "빈 탄창 감지" : "정상";
+                testResult.Text = $"{state}  빨강 {result.BrightRedPixels}/{result.Threshold}";
+                testResult.ForeColor = result.IsEmpty ? Color.FromArgb(255, 100, 100) : Color.LightGreen;
+            }
+
+            private void CopySettings()
+            {
+                AutoReloadSettings value = settings.Normalized();
+                Clipboard.SetText(
+                    "자동 재장전 인식 설정" + Environment.NewLine +
+                    $"x={value.X}, y={value.Y}, width={value.Width}, height={value.Height}, border={value.BorderThickness}, minRedPixels={value.MinRedPixels}" + Environment.NewLine + Environment.NewLine +
+                    "settings.ini" + Environment.NewLine +
+                    $"autoReload.x={value.X}" + Environment.NewLine +
+                    $"autoReload.y={value.Y}" + Environment.NewLine +
+                    $"autoReload.width={value.Width}" + Environment.NewLine +
+                    $"autoReload.height={value.Height}" + Environment.NewLine +
+                    $"autoReload.border={value.BorderThickness}" + Environment.NewLine +
+                    $"autoReload.minRedPixels={value.MinRedPixels}");
             }
         }
 
@@ -10844,6 +11315,8 @@ namespace HD2_Helper
             _crosshairTimer?.Dispose();
             _supportWeaponGaugeTimer?.Stop();
             _supportWeaponGaugeTimer?.Dispose();
+            _autoReloadDetectionTimer?.Stop();
+            _autoReloadDetectionTimer?.Dispose();
             _inactiveGameAudioMuteTimer?.Stop();
             _inactiveGameAudioMuteTimer?.Dispose();
             _softwareCursorTimer?.Stop();
@@ -10852,6 +11325,7 @@ namespace HD2_Helper
             _padLoopCts?.Cancel();
             _padLoopCts?.Dispose();
             _ocrRegionSettingsForm?.Dispose();
+            _autoReloadCalibrationForm?.Dispose();
             _crosshairEditorForm?.Dispose();
             _crosshairForm?.Dispose();
             _supportWeaponGaugeForm?.Dispose();
@@ -10873,6 +11347,7 @@ namespace HD2_Helper
             _presetOverlayForm = null;
             _helperEditorWindow = null;
             _ocrRegionSettingsForm = null;
+            _autoReloadCalibrationForm = null;
             _crosshairEditorForm = null;
             _crosshairForm = null;
             _supportWeaponGaugeForm = null;
@@ -10883,6 +11358,7 @@ namespace HD2_Helper
 
             _crosshairTimer = null;
             _supportWeaponGaugeTimer = null;
+            _autoReloadDetectionTimer = null;
             _inactiveGameAudioMuteTimer = null;
             _padLoopCts = null;
             _inputHook = null;

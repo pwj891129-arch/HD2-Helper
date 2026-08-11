@@ -1669,6 +1669,14 @@
                         <span class="setting-label">오버레이 캡처 제외(WGC)</span>
                         <input id="setting-exclude-overlays-from-capture" type="checkbox" onchange="toggleExcludeOverlaysFromCapture(this.checked)">
                     </label>
+                    <label class="crosshair-row">
+                        <span class="setting-label">자동 재장전</span>
+                        <input id="setting-auto-reload" type="checkbox" onchange="toggleAutoReload(this.checked)">
+                    </label>
+                    <div class="setting-row" onclick="openAutoReloadCalibration()">
+                        <span class="setting-label">자동 재장전 인식 보정</span>
+                        <button class="setting-value-btn" type="button" tabindex="-1">열기</button>
+                    </div>
                     <div class="setting-row" data-setting-row="autoSelectKey" onclick="startKeyCapture('autoSelectKey')">
                         <span class="setting-label">자동선택 단축키</span>
                         <button class="setting-key-btn" type="button" data-setting-key="autoSelectKey" tabindex="-1"></button>
@@ -1761,6 +1769,10 @@
                         <button class="setting-value-btn" type="button" tabindex="-1">열기</button>
                     </div>
                     <div class="settings-subtitle">지원무기 보조</div>
+                    <div class="setting-row" data-setting-row="supportWeaponModeKey" onclick="startKeyCapture('supportWeaponModeKey')">
+                        <span class="setting-label">자동사격 모드전환 키</span>
+                        <button class="setting-key-btn" type="button" data-setting-key="supportWeaponModeKey" tabindex="-1"></button>
+                    </div>
                     <label class="crosshair-row">
                         <span class="setting-label">기능 모드</span>
                         <select class="crosshair-control crosshair-select" data-support-weapon-setting="mode">
@@ -2317,6 +2329,10 @@
             postAppMessage({ type: 'SET_EXCLUDE_OVERLAYS_FROM_CAPTURE', enabled: excludeOverlaysFromCapture });
         }
 
+        function toggleAutoReload(enabled) {
+            postAppMessage({ type: 'SET_AUTO_RELOAD_ENABLED', enabled: enabled === true });
+        }
+
         function toggleStratagemReselectEnabled(enabled) {
             // 재선택을 끄면 자동선택은 OCR 보정 없이 프리셋 좌표만 따라가므로 빈 슬롯 최초 선택에 적합하다.
             stratagemReselectEnabled = enabled === true;
@@ -2622,6 +2638,10 @@
             postAppMessage({ type: 'OPEN_OCR_REGION_SETTINGS' });
         }
 
+        function openAutoReloadCalibration() {
+            postAppMessage({ type: 'OPEN_AUTO_RELOAD_CALIBRATION' });
+        }
+
         function openPresetOverlay() {
             postAppMessage({ type: 'OPEN_PRESET_OVERLAY' });
         }
@@ -2763,6 +2783,7 @@
             testModeEnabled = data.testModeEnabled === true;
             muteGameAudioWhenInactive = data.muteGameAudioWhenInactive === true;
             excludeOverlaysFromCapture = data.excludeOverlaysFromCapture === true;
+            const autoReloadEnabled = data.autoReloadEnabled === true;
             const stratagemReselectControl = document.getElementById('setting-stratagem-reselect-enabled');
             if (stratagemReselectControl) stratagemReselectControl.checked = stratagemReselectEnabled;
             const presetAutoSaveControl = document.getElementById('setting-preset-auto-save');
@@ -2780,6 +2801,8 @@
             if (inactiveMuteControl) inactiveMuteControl.checked = muteGameAudioWhenInactive;
             const excludeCaptureControl = document.getElementById('setting-exclude-overlays-from-capture');
             if (excludeCaptureControl) excludeCaptureControl.checked = excludeOverlaysFromCapture;
+            const autoReloadControl = document.getElementById('setting-auto-reload');
+            if (autoReloadControl) autoReloadControl.checked = autoReloadEnabled;
 
             const keys = data.keys || {};
             if (String(data.waitingTarget || '').startsWith('manualStratagem')) {
@@ -2799,6 +2822,7 @@
             updateSettingKeyButton('manualStratagemLeftKey', keys.manualStratagemLeftKey, data.waitingTarget);
             updateSettingKeyButton('manualStratagemRightKey', keys.manualStratagemRightKey, data.waitingTarget);
             updateSettingKeyButton('crosshairToggleKey', keys.crosshairToggleKey, data.waitingTarget);
+            updateSettingKeyButton('supportWeaponModeKey', keys.supportWeaponModeKey, data.waitingTarget);
             renderSlotKeySettings(keys.slots || [], data.waitingTarget);
             renderCrosshairSettings(data.crosshair || currentCrosshairSettings || {});
             const globalSupportWeaponSettings = normalizeSupportWeaponSettings(data.supportWeapon || currentSupportWeaponSettings || {});

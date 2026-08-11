@@ -21,7 +21,7 @@
 		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
 		<!-- GitHub 릴리스와 업데이터가 동일한 버전을 판별하도록 배포 버전을 함께 갱신한다. -->
 		<!-- 상세 버전은 사전 테스트 빌드 번호이며, 정식 빌드는 마지막 테스트 다음 번호를 사용한다. -->
-		<Version>2.0.29.1</Version>
+		<Version>2.0.29.2</Version>
 		<GenerateAssemblyInfo>true</GenerateAssemblyInfo>
 	</PropertyGroup>
 

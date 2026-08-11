@@ -154,6 +154,8 @@ namespace HD2_Helper
         private CancellationTokenSource? _autoSelectionCts;
         private InputHookManager? _inputHook;
         private OcrEngine? _ocrEngine;
+        // 자동선택과 자동 재장전이 같은 OCR 엔진을 동시에 호출하지 않도록 직렬화한다.
+        private readonly SemaphoreSlim _ocrRecognitionGate = new(1, 1);
         private Point _cachedGameClientCenter = Point.Empty;
         private bool _hasCachedGameClientCenter;
         private readonly IntPtr _embeddedParentHandle;
@@ -231,7 +233,7 @@ namespace HD2_Helper
         private static bool _pauseGamepadLoop;
         private static bool _muteGameAudioWhenInactive;
         private static bool _excludeOverlaysFromCapture;
-        // 기본 OFF: 주무기 탄창이 비어 빨간 UI가 깜빡일 때만 공격 입력에 재장전을 보조한다.
+        // 기본 OFF: 중앙의 "무기 장전" 안내가 보일 때만 공격 입력에 재장전을 보조한다.
         private static bool _autoReloadEnabled;
         private static AutoReloadSettings _autoReloadSettings = new();
         private static string _selectedPresetId = "";
@@ -277,10 +279,10 @@ namespace HD2_Helper
         private string _supportWeaponMode = "Off";
         private bool? _lastObservedGameActive;
         private readonly Dictionary<string, bool> _gameAudioMuteStatesBeforeHelper = new();
-        private DateTime _lastAutoReloadRedSeenAt = DateTime.MinValue;
         private DateTime _lastAutoReloadAttemptAt = DateTime.MinValue;
         private AutoReloadDetectionResult _lastAutoReloadDetection = AutoReloadDetectionResult.Empty;
-        private readonly Queue<(DateTime CapturedAt, int BrightRedPixels)> _autoReloadRedSamples = new();
+        // 발사 시작과 해제 뒤의 검사가 겹쳐도 OCR 판독과 R 입력 판단은 순서대로 한 번씩 처리한다.
+        private readonly SemaphoreSlim _autoReloadCheckGate = new(1, 1);
 
         public class InputEventArgs : EventArgs
         {
@@ -1207,13 +1209,12 @@ namespace HD2_Helper
                 {
                     if (doc.RootElement.TryGetProperty("enabled", out var enabledElement))
                     {
-                        // 자동 재장전은 사용자가 명시적으로 켠 경우에만 주무기 HUD 감지를 시작한다.
+                        // 자동 재장전은 사용자가 명시적으로 켠 경우에만 중앙 장전 안내 감지를 시작한다.
                         _autoReloadEnabled = enabledElement.GetBoolean();
-                        _lastAutoReloadRedSeenAt = DateTime.MinValue;
                         if (_autoReloadDetectionTimer != null)
                         {
-                            if (_autoReloadEnabled) _autoReloadDetectionTimer.Start();
-                            else _autoReloadDetectionTimer.Stop();
+                            // 자동 재장전 검사는 상시 타이머가 아니라 실제 발사 입력 시점에만 수행한다.
+                            _autoReloadDetectionTimer.Stop();
                         }
                         SaveSetting();
                         SendSettingsToWeb();
@@ -1733,7 +1734,7 @@ namespace HD2_Helper
         {
             if (!File.Exists(SettingsPath)) return;
 
-            bool loadedAutoReloadX = false;
+            bool loadedAutoReloadPromptRegion = false;
             foreach (string rawLine in File.ReadAllLines(SettingsPath, Encoding.UTF8))
             {
                 string line = rawLine.Trim();
@@ -1828,11 +1829,15 @@ namespace HD2_Helper
                     if (!uint.TryParse(value, out uint vk)) continue;
                     _autoReloadEnabled = vk != 0;
                 }
+                else if (key.Equals("autoReload.promptRegionVersion", StringComparison.OrdinalIgnoreCase))
+                {
+                    // 이전 좌하단 HUD 보정값은 중앙 장전 안내 영역과 호환되지 않아 한 번만 새 기본값으로 교체한다.
+                    loadedAutoReloadPromptRegion = int.TryParse(value, out int version) && version >= 1;
+                }
                 else if (key.StartsWith("autoReload.", StringComparison.OrdinalIgnoreCase)
                     && int.TryParse(value, out int autoReloadValue))
                 {
-                    // 주무기 탄창 감지값은 OCR 영역과 별개로 보관해, 화면 보정이 서로 영향을 주지 않게 한다.
-                    if (key.Equals("autoReload.x", StringComparison.OrdinalIgnoreCase)) loadedAutoReloadX = true;
+                    // 중앙 장전 안내의 좌표는 다른 OCR 항목과 별개로 보관해 보정값이 서로 영향을 주지 않게 한다.
                     _autoReloadSettings = _autoReloadSettings.WithProperty(key["autoReload.".Length..], autoReloadValue).Normalized();
                 }
                 else if (TryGetManualStratagemDirection(key, out string manualDirection))
@@ -1900,17 +1905,10 @@ namespace HD2_Helper
                 }
             }
 
-            // 이전 기본 보정값(X=300)만 그대로 쓰던 설치본은 배낭이 없을 때 주무기 아이콘을 놓쳤다.
-            // 사용자가 따로 보정한 값은 건드리지 않고, 예전 기본 조합일 때만 새 기본 시작점으로 옮긴다.
-            if (loadedAutoReloadX
-                && _autoReloadSettings.X == 300
-                && _autoReloadSettings.Y == 875
-                && _autoReloadSettings.Width == 360
-                && _autoReloadSettings.Height == 190
-                && _autoReloadSettings.BorderThickness == 2
-                && _autoReloadSettings.MinRedPixels == 120)
+            if (!loadedAutoReloadPromptRegion)
             {
-                _autoReloadSettings.X = 150;
+                // 구버전의 좌하단 빨간 HUD 보정값은 현재 방식에서 의미가 없으므로 중앙 안내용 기본값을 사용한다.
+                _autoReloadSettings = new AutoReloadSettings();
             }
 
             // settings.ini에서 추가 슬롯 수를 읽은 뒤에만 배열 길이를 맞춰, 기존 프리셋 데이터가 잘리지 않게 한다.
@@ -1938,12 +1936,13 @@ namespace HD2_Helper
                 $"muteGameAudioWhenInactive={(_muteGameAudioWhenInactive ? 1 : 0)}",
                 $"excludeOverlaysFromCapture={(_excludeOverlaysFromCapture ? 1 : 0)}",
                 $"autoReloadEnabled={(_autoReloadEnabled ? 1 : 0)}",
+                $"autoReload.promptRegionVersion=1",
                 $"autoReload.x={_autoReloadSettings.Normalized().X}",
                 $"autoReload.y={_autoReloadSettings.Normalized().Y}",
                 $"autoReload.width={_autoReloadSettings.Normalized().Width}",
                 $"autoReload.height={_autoReloadSettings.Normalized().Height}",
                 $"autoReload.border={_autoReloadSettings.Normalized().BorderThickness}",
-                $"autoReload.minRedPixels={_autoReloadSettings.Normalized().MinRedPixels}",
+                $"autoReload.minimumPromptMatches={_autoReloadSettings.Normalized().MinimumPromptMatches}",
                 $"manualStratagemStartKey={GetManualStratagemKey("start")}",
                 $"manualStratagemUpKey={GetManualStratagemKey("up")}",
                 $"manualStratagemDownKey={GetManualStratagemKey("down")}",
@@ -2133,7 +2132,10 @@ namespace HD2_Helper
             var payload = new
             {
                 type = "PRESETS_LOADED",
-                presets = presetsDoc.RootElement.Clone()
+                presets = presetsDoc.RootElement.Clone(),
+                // 설정 메시지와 프리셋 목록은 비동기로 도착한다. 목록에도 마지막 선택 ID를 실어 초기 탭 복원을 보장한다.
+                selectedPresetId = _selectedPresetId,
+                selectedEquipmentPresetId = _selectedEquipmentPresetId
             };
 
             PostWebMessageToViews(payload, target);
@@ -2355,78 +2357,43 @@ namespace HD2_Helper
 
         private void InitializeAutoReloadDetection()
         {
-            // 별도 감지 타이머는 자동 재장전이 켜진 경우에만 작은 주무기 영역을 캡처한다.
-            _autoReloadDetectionTimer = new System.Windows.Forms.Timer { Interval = 120 };
-            _autoReloadDetectionTimer.Tick += (_, _) => UpdateAutoReloadDetection();
-            if (_autoReloadEnabled)
-                _autoReloadDetectionTimer.Start();
+            // 재장전 OCR은 발사 입력 때만 수행한다. 타이머 인스턴스는 종료 처리와 기존 설정 호환을 위해 보관한다.
+            _autoReloadDetectionTimer = new System.Windows.Forms.Timer { Interval = 180 };
         }
 
-        private void UpdateAutoReloadDetection()
-        {
-            if (!_autoReloadEnabled || !IsGameActive() || _isChat)
-            {
-                _lastAutoReloadRedSeenAt = DateTime.MinValue;
-                _autoReloadRedSamples.Clear();
-                return;
-            }
-
-            AutoReloadDetectionResult result = DetectEmptyPrimaryWeapon();
-            DateTime now = DateTime.UtcNow;
-            bool blinkConfirmed = result.IsEmpty && IsAutoReloadBlinkConfirmed(now, result.BrightRedPixels, result.Threshold);
-            // 정적인 붉은 배경/로비 UI는 후보로 남더라도 빨강 경고가 켜졌다 꺼지는 패턴이 없으므로 빈 탄창으로 확정하지 않는다.
-            _lastAutoReloadDetection = result with
-            {
-                IsEmpty = blinkConfirmed,
-                Note = blinkConfirmed ? "주무기 빈 탄창 깜빡임 확인" : "주무기 빨강 후보 확인 중"
-            };
-
-            if (blinkConfirmed)
-            {
-                // HUD가 깜빡이는 프레임 사이에도 잠깐 상태를 유지해 공격 입력과 놓치지 않게 한다.
-                _lastAutoReloadRedSeenAt = now;
-            }
-            else if (now - _lastAutoReloadRedSeenAt > TimeSpan.FromMilliseconds(500))
-            {
-                _lastAutoReloadRedSeenAt = DateTime.MinValue;
-            }
-        }
-
-        private bool IsAutoReloadBlinkConfirmed(DateTime now, int brightRedPixels, int threshold)
-        {
-            _autoReloadRedSamples.Enqueue((now, brightRedPixels));
-            while (_autoReloadRedSamples.Count > 0
-                && now - _autoReloadRedSamples.Peek().CapturedAt > TimeSpan.FromMilliseconds(1200))
-            {
-                _autoReloadRedSamples.Dequeue();
-            }
-
-            if (_autoReloadRedSamples.Count < 4 || threshold <= 0)
-                return false;
-
-            int maximum = _autoReloadRedSamples.Max(sample => sample.BrightRedPixels);
-            int minimum = _autoReloadRedSamples.Min(sample => sample.BrightRedPixels);
-            int lowLimit = Math.Max(8, threshold / 3);
-            // 빈 탄창 HUD는 빨간색 무기/탄창을 주기적으로 켰다 끈다. 장면의 정적인 붉은 색은 이 낙폭을 만들지 못한다.
-            return brightRedPixels >= threshold
-                && maximum >= threshold
-                && minimum <= lowLimit
-                && maximum - minimum >= Math.Max(30, threshold * 2 / 3);
-        }
-
-        private void TryTriggerAutoReloadFromPrimaryAttack()
+        private async Task TryTriggerAutoReloadFromPrimaryAttackAsync()
         {
             if (!_autoReloadEnabled || !IsGameActive() || _isChat)
                 return;
 
-            DateTime now = DateTime.UtcNow;
-            bool recentlyDetectedEmpty = now - _lastAutoReloadRedSeenAt <= TimeSpan.FromMilliseconds(500);
-            if (!recentlyDetectedEmpty || now - _lastAutoReloadAttemptAt < TimeSpan.FromSeconds(1))
-                return;
+            await _autoReloadCheckGate.WaitAsync();
+            try
+            {
+                AutoReloadDetectionResult result = await DetectReloadPromptAsync();
+                DateTime now = DateTime.UtcNow;
+                _lastAutoReloadDetection = result;
 
-            // 재장전은 공격 입력을 막지 않고, 비어 있는 주무기를 쏘려는 순간에만 추가로 탭한다.
-            // 쿨타임 시점은 여기서가 아니라 실제 R 입력을 주입한 뒤에만 기록한다.
-            TriggerAutoReloadTap();
+                if (!result.IsEmpty || now - _lastAutoReloadAttemptAt < TimeSpan.FromMilliseconds(100))
+                    return;
+
+                // 중앙 안내가 실제로 보인 발사 시점에만 R을 탭한다. 쿨타임은 입력 직후부터 0.1초다.
+                TriggerAutoReloadTap();
+            }
+            catch
+            {
+                _lastAutoReloadDetection = AutoReloadDetectionResult.Empty with { Note = "장전 안내 OCR에 실패했습니다." };
+            }
+            finally
+            {
+                _autoReloadCheckGate.Release();
+            }
+        }
+
+        private async Task TryTriggerAutoReloadAfterPrimaryReleaseAsync()
+        {
+            // 발사키를 놓은 직후에는 게임 HUD가 갱신되는 시간을 짧게 준 뒤 같은 안내를 한 번 더 확인한다.
+            await Task.Delay(100);
+            await TryTriggerAutoReloadFromPrimaryAttackAsync();
         }
 
         private async void TriggerAutoReloadTap()
@@ -2434,7 +2401,7 @@ namespace HD2_Helper
             try
             {
                 SendInput((uint)Keys.R, true);
-                // 실제 재장전 명령을 보낸 뒤부터만 1초 재시도 제한을 적용한다.
+                // 실제 재장전 명령을 보낸 뒤부터만 0.1초 재시도 제한을 적용한다.
                 _lastAutoReloadAttemptAt = DateTime.UtcNow;
                 await Task.Delay(Math.Min(Math.Max(_inputDelay, 25), 60));
             }
@@ -3182,7 +3149,7 @@ namespace HD2_Helper
 
         private Task<AutoReloadDetectionResult> TestAutoReloadDetectionAsync(AutoReloadSettings settings)
         {
-            return Task.FromResult(DetectEmptyPrimaryWeapon(settings));
+            return DetectReloadPromptAsync(settings);
         }
 
         private void ApplyOcrRegionSettings(Dictionary<string, OcrRegionSettings> settings)
@@ -3412,8 +3379,19 @@ namespace HD2_Helper
                 UpdateSupportWeaponGaugeOverlay();
                 RefreshSupportWeaponGaugeTimerState();
 
-                if (e.IsDown && !e.IsInjected)
-                    TryTriggerAutoReloadFromPrimaryAttack();
+                if (!e.IsInjected)
+                {
+                    if (e.IsDown)
+                    {
+                        // 발사키를 누른 직후의 빈 탄창 안내를 즉시 확인한다.
+                        _ = TryTriggerAutoReloadFromPrimaryAttackAsync();
+                    }
+                    else
+                    {
+                        // 발사키 해제 후 HUD가 한 프레임 갱신된 시점에도 한 번 더 확인한다.
+                        _ = TryTriggerAutoReloadAfterPrimaryReleaseAsync();
+                    }
+                }
             }
 
             if (e.IsDown && vkCode == (uint)Keys.Escape && !e.IsInjected && TryCancelAutoSelection())
@@ -4438,7 +4416,7 @@ namespace HD2_Helper
             return region.Width > 0 && region.Height > 0;
         }
 
-        private static AutoReloadDetectionResult DetectEmptyPrimaryWeapon(AutoReloadSettings? overrideSettings = null)
+        private async Task<AutoReloadDetectionResult> DetectReloadPromptAsync(AutoReloadSettings? overrideSettings = null)
         {
             AutoReloadSettings settings = (overrideSettings ?? _autoReloadSettings).Normalized();
             if (!TryBuildGameScreenRect(settings.X, settings.Y, settings.Width, settings.Height, out Rectangle region))
@@ -4446,55 +4424,30 @@ namespace HD2_Helper
 
             try
             {
-                using Bitmap capture = new(region.Width, region.Height, PixelFormat.Format32bppArgb);
-                using (Graphics graphics = Graphics.FromImage(capture))
-                    graphics.CopyFromScreen(region.Left, region.Top, 0, 0, capture.Size);
+                var ocrSettings = new OcrRegionSettings
+                {
+                    X = settings.X,
+                    Y = settings.Y,
+                    Width = settings.Width,
+                    Height = settings.Height,
+                    BorderThickness = settings.BorderThickness
+                };
+                string rawText = await ReadOcrTextFromRegion("자동재장전", ocrSettings);
+                string scanText = CleanScanText(rawText);
+                int matchedKeywords = 0;
 
-                int brightRedPixels = CountBrightHudRedPixels(capture);
-                bool isEmpty = brightRedPixels >= settings.MinRedPixels;
-                return new AutoReloadDetectionResult(isEmpty, brightRedPixels, settings.MinRedPixels, region, "주무기 우측 HUD 영역");
+                // 한국어 UI의 "무기 장전"을 기본으로 보고, 영어 UI의 RELOAD도 같은 의미로 처리한다.
+                if (scanText.Contains("무기", StringComparison.Ordinal)) matchedKeywords++;
+                if (scanText.Contains("장전", StringComparison.Ordinal)) matchedKeywords++;
+                if (scanText.Contains("RELOAD", StringComparison.Ordinal)) matchedKeywords += 2;
+
+                bool isReloadPrompt = matchedKeywords >= settings.MinimumPromptMatches;
+                string note = isReloadPrompt ? "중앙 무기 장전 안내 확인" : "중앙 장전 안내를 찾지 못했습니다.";
+                return new AutoReloadDetectionResult(isReloadPrompt, matchedKeywords, settings.MinimumPromptMatches, rawText, region, note);
             }
             catch
             {
                 return AutoReloadDetectionResult.Empty with { Note = "화면 캡처에 실패했습니다." };
-            }
-        }
-
-        private static int CountBrightHudRedPixels(Bitmap bitmap)
-        {
-            Rectangle bounds = new(Point.Empty, bitmap.Size);
-            BitmapData? bitmapData = null;
-            try
-            {
-                bitmapData = bitmap.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-                int stride = Math.Abs(bitmapData.Stride);
-                byte[] bytes = new byte[stride * bitmap.Height];
-                Marshal.Copy(bitmapData.Scan0, bytes, 0, bytes.Length);
-
-                int redPixels = 0;
-                // UI 경고색은 밝고 채도가 높다. 반투명 패널 너머의 어두운 갈색/붉은 배경은 제외한다.
-                for (int y = 0; y < bitmap.Height; y += 2)
-                {
-                    int row = y * stride;
-                    for (int x = 0; x < bitmap.Width; x += 2)
-                    {
-                        int index = row + (x * 4);
-                        byte blue = bytes[index];
-                        byte green = bytes[index + 1];
-                        byte red = bytes[index + 2];
-
-                        if (red >= 150 && red >= green + 65 && red >= blue + 65 && green <= 125)
-                            redPixels++;
-                    }
-                }
-
-                // 두 칸 간격으로 표본을 읽었으므로 실제 밀도에 가까운 픽셀 수로 돌려준다.
-                return redPixels * 4;
-            }
-            finally
-            {
-                if (bitmapData != null)
-                    bitmap.UnlockBits(bitmapData);
             }
         }
 
@@ -4521,22 +4474,30 @@ namespace HD2_Helper
 
         private async Task<string> RecognizeTextFromBitmap(Bitmap bitmap)
         {
-            using var ms = new MemoryStream();
-            bitmap.Save(ms, ImageFormat.Png);
-            ms.Position = 0;
+            await _ocrRecognitionGate.WaitAsync();
+            try
+            {
+                using var ms = new MemoryStream();
+                bitmap.Save(ms, ImageFormat.Png);
+                ms.Position = 0;
 
-            using var ras = ms.AsRandomAccessStream();
-            var decoder = await BitmapDecoder.CreateAsync(ras);
-            using var softwareBitmap = await decoder.GetSoftwareBitmapAsync();
+                using var ras = ms.AsRandomAccessStream();
+                var decoder = await BitmapDecoder.CreateAsync(ras);
+                using var softwareBitmap = await decoder.GetSoftwareBitmapAsync();
 
-            if (_ocrEngine == null)
-                _ocrEngine = CreateKoreanOcrEngine();
+                if (_ocrEngine == null)
+                    _ocrEngine = CreateKoreanOcrEngine();
 
-            if (_ocrEngine == null)
-                return "";
+                if (_ocrEngine == null)
+                    return "";
 
-            var ocrResult = await _ocrEngine.RecognizeAsync(softwareBitmap);
-            return NormalizeOcrRawText(ocrResult.Text ?? "");
+                var ocrResult = await _ocrEngine.RecognizeAsync(softwareBitmap);
+                return NormalizeOcrRawText(ocrResult.Text ?? "");
+            }
+            finally
+            {
+                _ocrRecognitionGate.Release();
+            }
         }
 
         private async Task<string> ReadOcrTextFromRegion(string targetType, OcrRegionSettings ocrSettings)
@@ -7616,13 +7577,13 @@ namespace HD2_Helper
 
         public class AutoReloadSettings
         {
-            // 1920x1080 기준 좌하단 HUD의 가장 오른쪽 주무기 영역이다. 왼쪽의 수류탄/배낭은 처음부터 포함하지 않는다.
-            public int X { get; set; } = 150;
-            public int Y { get; set; } = 875;
+            // 1920x1080 기준 중앙의 "탭 R : 무기 장전" 안내가 HUD 커브 값에 따라 위아래로 움직이는 범위다.
+            public int X { get; set; } = 820;
+            public int Y { get; set; } = 0;
             public int Width { get; set; } = 360;
-            public int Height { get; set; } = 190;
+            public int Height { get; set; } = 230;
             public int BorderThickness { get; set; } = 2;
-            public int MinRedPixels { get; set; } = 120;
+            public int MinimumPromptMatches { get; set; } = 2;
 
             public AutoReloadSettings Clone() => new()
             {
@@ -7631,7 +7592,7 @@ namespace HD2_Helper
                 Width = Width,
                 Height = Height,
                 BorderThickness = BorderThickness,
-                MinRedPixels = MinRedPixels
+                MinimumPromptMatches = MinimumPromptMatches
             };
 
             public AutoReloadSettings Normalized() => new()
@@ -7641,7 +7602,7 @@ namespace HD2_Helper
                 Width = Math.Clamp(Width, 30, 800),
                 Height = Math.Clamp(Height, 30, 400),
                 BorderThickness = Math.Clamp(BorderThickness, 1, 12),
-                MinRedPixels = Math.Clamp(MinRedPixels, 20, 20000)
+                MinimumPromptMatches = Math.Clamp(MinimumPromptMatches, 1, 2)
             };
 
             public AutoReloadSettings WithProperty(string property, int value)
@@ -7654,7 +7615,7 @@ namespace HD2_Helper
                     case "width": next.Width = value; break;
                     case "height": next.Height = value; break;
                     case "border": next.BorderThickness = value; break;
-                    case "minredpixels": next.MinRedPixels = value; break;
+                    case "minimumpromptmatches": next.MinimumPromptMatches = value; break;
                 }
 
                 return next;
@@ -7663,12 +7624,13 @@ namespace HD2_Helper
 
         private readonly record struct AutoReloadDetectionResult(
             bool IsEmpty,
-            int BrightRedPixels,
-            int Threshold,
+            int KeywordMatches,
+            int RequiredKeywordMatches,
+            string RawText,
             Rectangle Region,
             string Note)
         {
-            public static AutoReloadDetectionResult Empty => new(false, 0, 0, Rectangle.Empty, "대기 중");
+            public static AutoReloadDetectionResult Empty => new(false, 0, 0, "", Rectangle.Empty, "대기 중");
         }
 
         private class AutoReloadCalibrationForm : Form
@@ -7681,7 +7643,7 @@ namespace HD2_Helper
             private readonly NumericUpDown widthInput = new();
             private readonly NumericUpDown heightInput = new();
             private readonly NumericUpDown borderInput = new();
-            private readonly NumericUpDown minRedPixelsInput = new();
+            private readonly NumericUpDown minimumPromptMatchesInput = new();
             private readonly Label testResult = new();
             private AutoReloadSettings settings;
             private bool loading;
@@ -7697,7 +7659,7 @@ namespace HD2_Helper
                 this.onTestRequested = onTestRequested;
                 settings = initialSettings.Normalized();
 
-                Text = "자동 재장전 인식 보정";
+                Text = "자동 재장전 안내 보정";
                 ClientSize = new Size(470, 370);
                 MinimumSize = new Size(470, 370);
                 FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -7720,7 +7682,7 @@ namespace HD2_Helper
                 widthInput.Value = settings.Width;
                 heightInput.Value = settings.Height;
                 borderInput.Value = settings.BorderThickness;
-                minRedPixelsInput.Value = settings.MinRedPixels;
+                minimumPromptMatchesInput.Value = settings.MinimumPromptMatches;
                 loading = false;
                 onPreviewChanged(settings);
             }
@@ -7744,7 +7706,7 @@ namespace HD2_Helper
                 AddInputRow(root, 2, "너비", widthInput, 30, 800);
                 AddInputRow(root, 3, "높이", heightInput, 30, 400);
                 AddInputRow(root, 4, "박스 굵기", borderInput, 1, 12);
-                AddInputRow(root, 5, "빨강 최소 픽셀", minRedPixelsInput, 20, 20000);
+                AddInputRow(root, 5, "최소 일치 문구", minimumPromptMatchesInput, 1, 2);
 
                 var testButton = CreateButton("테스트");
                 testButton.Click += async (_, _) => await RunTestAsync();
@@ -7816,7 +7778,7 @@ namespace HD2_Helper
                     Width = (int)widthInput.Value,
                     Height = (int)heightInput.Value,
                     BorderThickness = (int)borderInput.Value,
-                    MinRedPixels = (int)minRedPixelsInput.Value
+                    MinimumPromptMatches = (int)minimumPromptMatchesInput.Value
                 }.Normalized();
 
                 onSettingsChanged(settings.Clone());
@@ -7826,8 +7788,9 @@ namespace HD2_Helper
             private async Task RunTestAsync()
             {
                 AutoReloadDetectionResult result = await onTestRequested(settings);
-                string state = result.IsEmpty ? "빈 탄창 감지" : "정상";
-                testResult.Text = $"{state}  빨강 {result.BrightRedPixels}/{result.Threshold}";
+                string state = result.IsEmpty ? "장전 안내 감지" : "미감지";
+                string recognized = string.IsNullOrWhiteSpace(result.RawText) ? "(없음)" : result.RawText;
+                testResult.Text = $"{state}  문구 {result.KeywordMatches}/{result.RequiredKeywordMatches}: {recognized}";
                 testResult.ForeColor = result.IsEmpty ? Color.FromArgb(255, 100, 100) : Color.LightGreen;
             }
 
@@ -7836,14 +7799,15 @@ namespace HD2_Helper
                 AutoReloadSettings value = settings.Normalized();
                 Clipboard.SetText(
                     "자동 재장전 인식 설정" + Environment.NewLine +
-                    $"x={value.X}, y={value.Y}, width={value.Width}, height={value.Height}, border={value.BorderThickness}, minRedPixels={value.MinRedPixels}" + Environment.NewLine + Environment.NewLine +
+                    $"x={value.X}, y={value.Y}, width={value.Width}, height={value.Height}, border={value.BorderThickness}, minimumPromptMatches={value.MinimumPromptMatches}" + Environment.NewLine + Environment.NewLine +
                     "settings.ini" + Environment.NewLine +
+                    "autoReload.promptRegionVersion=1" + Environment.NewLine +
                     $"autoReload.x={value.X}" + Environment.NewLine +
                     $"autoReload.y={value.Y}" + Environment.NewLine +
                     $"autoReload.width={value.Width}" + Environment.NewLine +
                     $"autoReload.height={value.Height}" + Environment.NewLine +
                     $"autoReload.border={value.BorderThickness}" + Environment.NewLine +
-                    $"autoReload.minRedPixels={value.MinRedPixels}");
+                    $"autoReload.minimumPromptMatches={value.MinimumPromptMatches}");
             }
         }
 

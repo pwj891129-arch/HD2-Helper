@@ -1674,7 +1674,7 @@
                         <input id="setting-auto-reload" type="checkbox" onchange="toggleAutoReload(this.checked)">
                     </label>
                     <div class="setting-row" onclick="openAutoReloadCalibration()">
-                        <span class="setting-label">자동 재장전 인식 보정</span>
+                        <span class="setting-label">자동 재장전 안내 보정</span>
                         <button class="setting-value-btn" type="button" tabindex="-1">열기</button>
                     </div>
                     <div class="setting-row" data-setting-row="autoSelectKey" onclick="startKeyCapture('autoSelectKey')">
@@ -2035,6 +2035,8 @@
         let pendingPresetAutoSaveTimer = 0;
         // SETTINGS_LOADED는 설정 변경 때마다 다시 오므로, 최초 복원 이후에는 현재 편집 상태를 되돌리지 않는다.
         let initialSelectionStateReceived = false;
+        // PRESETS_LOADED에도 초기 선택값을 함께 받아, WebView 메시지 도착 순서와 관계없이 마지막 탭을 복원한다.
+        let initialPresetSelectionStateReceived = false;
         let currentLoadoutSyncReceived = false;
         let pendingSelectedPresetId = '';
         let pendingSelectedEquipmentPresetId = '';
@@ -2909,6 +2911,15 @@
                     equipmentPresets = collections.equipmentPresets;
                     presetsLoaded = true;
                     equipmentPresetsLoaded = true;
+                    if (!initialPresetSelectionStateReceived) {
+                        pendingSelectedPresetId = typeof data.selectedPresetId === 'string'
+                            ? data.selectedPresetId
+                            : pendingSelectedPresetId;
+                        pendingSelectedEquipmentPresetId = typeof data.selectedEquipmentPresetId === 'string'
+                            ? data.selectedEquipmentPresetId
+                            : pendingSelectedEquipmentPresetId;
+                        initialPresetSelectionStateReceived = true;
+                    }
                     applyPendingSelectedPreset();
                     renderPresetTabs();
                     renderEquipmentPresetTabs();

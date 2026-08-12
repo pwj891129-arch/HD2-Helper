@@ -3284,8 +3284,8 @@
                 const passiveCompare = String(left.Passives || '').localeCompare(String(right.Passives || ''), 'ko');
                 if (passiveCompare !== 0) return passiveCompare;
             } else {
-                const ratingCompare = getArmorRating(left) - getArmorRating(right);
-                if (ratingCompare !== 0) return ratingCompare;
+                // 장갑 등급 모드는 경량·일반·중량 구역 안의 database.json 등록 순서를 그대로 사용한다.
+                return 0;
             }
             return String(left.Name || '').localeCompare(String(right.Name || ''), 'ko');
         }
@@ -3294,10 +3294,13 @@
             // 정렬은 각 장갑 등급 구역 안에서만 적용해 경량·일반·중량 분류가 섞이지 않게 유지한다.
             return ['경량', '일반', '중량']
                 .map(category => {
-                    const items = (dbData?.['방어구']?.[category] || [])
+                    const sourceItems = (dbData?.['방어구']?.[category] || [])
                         .filter(item => item?.Passives && !excludedItems.has(item.Name))
                         .filter(item => !armorPassiveFilter || getArmorPassiveNames(item).includes(armorPassiveFilter))
-                        .sort(compareArmorItems);
+                    // 패시브 모드에서만 이름순 정렬하고, 장갑 등급 모드에서는 데이터 순서를 보존한다.
+                    const items = armorSortMode === 'passive'
+                        ? sourceItems.slice().sort(compareArmorItems)
+                        : sourceItems;
                     return [category, items];
                 })
                 .filter(([, items]) => items.length > 0);
@@ -3459,7 +3462,11 @@
             document.getElementById('excluded-items-category')?.remove();
             const targetType = currentTargetSlot?.type;
             const excludedInCurrentType = flattenDatabaseType(targetType)
-                .filter(item => excludedItems.has(item.Name));
+                .filter(item => excludedItems.has(item.Name))
+                // 패시브 필터를 고른 경우 제외 목록도 같은 조건으로 제한해 관련 없는 갑옷을 노출하지 않는다.
+                .filter(item => targetType !== '방어구'
+                    || !armorPassiveFilter
+                    || getArmorPassiveNames(item).includes(armorPassiveFilter));
 
             if (excludedInCurrentType.length === 0) return;
 

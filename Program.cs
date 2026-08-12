@@ -2477,7 +2477,7 @@ namespace HD2_Helper
 
         private async Task TryTriggerAutoReloadFromPrimaryAttackAsync()
         {
-            if (!_autoReloadEnabled || !IsGameActive() || _isChat)
+            if (!_autoReloadEnabled || !CanRunCombatHudAutomation())
                 return;
 
             await _autoReloadCheckGate.WaitAsync();
@@ -2501,6 +2501,13 @@ namespace HD2_Helper
             {
                 _autoReloadCheckGate.Release();
             }
+        }
+
+        private static bool CanRunCombatHudAutomation()
+        {
+            // 조준점이 표시될 수 있는 전투 HUD 상태에서만 OCR과 R 입력을 허용한다.
+            // 메뉴·채팅·마우스 커서가 열린 UI에서는 자동 재장전이 절대 동작하지 않는다.
+            return IsGameActive() && !_isChat && !CursorUtil.IsVisible();
         }
 
         private async Task TryTriggerAutoReloadAfterPrimaryReleaseAsync()
@@ -2754,9 +2761,8 @@ namespace HD2_Helper
 
             bool shouldShowCrosshair = _crosshairSettings.Enabled
                 && displayOpacityPercent > 0
-                && IsGameActive()
-                && !_isChat
-                && !CursorUtil.IsVisible();
+                // 자동 재장전과 동일한 전투 HUD 상태를 써 메뉴/채팅 중 동작 조건이 엇갈리지 않게 한다.
+                && CanRunCombatHudAutomation();
 
             if (shouldShowCrosshair)
             {

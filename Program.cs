@@ -122,6 +122,17 @@ namespace HD2_Helper
         private static readonly string AppDataPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "HD2 Helper");
         private static readonly string SettingsPath = Path.Combine(AppDataPath, "settings.ini");
         private static readonly string DisabledItemsPath = Path.Combine(AppDataPath, "disabled.ini");
+        // 새 장비는 아직 보유하지 않은 사용자가 많으므로, 이 버전에서만 기본 제외 목록에 한 번 추가한다.
+        private const string DefaultExcludedEquipmentVersion = "2.0.30.0";
+        private static readonly string DefaultExcludedEquipmentVersionPath = Path.Combine(AppDataPath, "disabled-default-version.txt");
+        private static readonly string[] DefaultExcludedNewEquipment =
+        {
+            "R/40-K 핫샷 마크맨 라이플",
+            "P/40-K 볼트 피스톨",
+            "G/40-K 멜타마인",
+            "TG-8 샤프슈터",
+            "TG-122 데모-트루퍼"
+        };
         private static readonly string PresetsPath = Path.Combine(AppDataPath, "presets.json");
         private static readonly string PresetBackupPath = Path.Combine(AppDataPath, "preset-backups");
         private static readonly string CrosshairPath = Path.Combine(AppDataPath, "crosshair.json");
@@ -1614,20 +1625,28 @@ namespace HD2_Helper
 
         private static string[] LoadDisabledItems()
         {
-            if (!File.Exists(DisabledItemsPath))
+            var items = File.Exists(DisabledItemsPath)
+                ? File.ReadAllLines(DisabledItemsPath, Encoding.UTF8)
+                    .Select(line => line.Trim())
+                    .Where(line => line.Length > 0 && !line.StartsWith(";") && !line.StartsWith("#"))
+                    .Distinct()
+                    .ToHashSet(StringComparer.Ordinal)
+                : new HashSet<string>(StringComparer.Ordinal);
+
+            // 이미 이 기본값을 받은 사용자는 수동 제외/해제 선택을 존중해 다시 덮어쓰지 않는다.
+            string appliedVersion = File.Exists(DefaultExcludedEquipmentVersionPath)
+                ? File.ReadAllText(DefaultExcludedEquipmentVersionPath, Encoding.UTF8).Trim()
+                : string.Empty;
+            if (!string.Equals(appliedVersion, DefaultExcludedEquipmentVersion, StringComparison.Ordinal))
             {
-                _disabledItems.Clear();
-                return Array.Empty<string>();
+                items.UnionWith(DefaultExcludedNewEquipment);
+                SaveDisabledItems(items);
+                Directory.CreateDirectory(AppDataPath);
+                File.WriteAllText(DefaultExcludedEquipmentVersionPath, DefaultExcludedEquipmentVersion, Encoding.UTF8);
             }
 
-            var items = File.ReadAllLines(DisabledItemsPath, Encoding.UTF8)
-                .Select(line => line.Trim())
-                .Where(line => line.Length > 0 && !line.StartsWith(";") && !line.StartsWith("#"))
-                .Distinct()
-                .ToArray();
-
-            _disabledItems = items.ToHashSet(StringComparer.Ordinal);
-            return items;
+            _disabledItems = items;
+            return items.OrderBy(item => item, StringComparer.Ordinal).ToArray();
         }
 
         private static void SaveDisabledItems(IEnumerable<string> items)

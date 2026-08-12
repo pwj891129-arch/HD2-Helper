@@ -3131,7 +3131,9 @@
                 '보조 무기': 'weapons',
                 '투척 무기': 'weapons'
             };
-            return `https://hd2.local/images/${folders[type]}/${name}.png`;
+            // 무기명에 포함된 /는 URL 경로로 해석되므로 파일명에서는 안전한 밑줄로 바꾼다.
+            const imageName = String(name || '').replaceAll('/', '_');
+            return `https://hd2.local/images/${folders[type]}/${imageName}.png`;
         }
 
         function normalizeSearchText(value) {

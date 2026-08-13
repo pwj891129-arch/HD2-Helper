@@ -123,7 +123,7 @@ namespace HD2_Helper
         private static readonly string SettingsPath = Path.Combine(AppDataPath, "settings.ini");
         private static readonly string DisabledItemsPath = Path.Combine(AppDataPath, "disabled.ini");
         // 새 장비는 아직 보유하지 않은 사용자가 많으므로, 이 버전에서만 기본 제외 목록에 한 번 추가한다.
-        private const string DefaultExcludedEquipmentVersion = "2.0.30.0";
+        private const string DefaultExcludedEquipmentVersion = "2.0.30.1";
         private static readonly string DefaultExcludedEquipmentVersionPath = Path.Combine(AppDataPath, "disabled-default-version.txt");
         private static readonly string[] DefaultExcludedNewEquipment =
         {
@@ -131,7 +131,8 @@ namespace HD2_Helper
             "P/40-K 볼트 피스톨",
             "G/40-K 멜타마인",
             "TG-8 샤프슈터",
-            "TG-122 데모-트루퍼"
+            "TG-122 데모-트루퍼",
+            "멜타건"
         };
         private static readonly string PresetsPath = Path.Combine(AppDataPath, "presets.json");
         private static readonly string PresetBackupPath = Path.Combine(AppDataPath, "preset-backups");

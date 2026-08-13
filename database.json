@@ -36,6 +36,7 @@
 		{ "Name": "대물소총", "Sequence": ["down", "left", "right", "up", "down"] },
 		{ "Name": "에포크", "Sequence": ["down", "left", "up", "left", "right"] },
 		{ "Name": "유탄 발사기", "Sequence": ["down", "left", "up", "left", "down"] },
+		{ "Name": "멜타건", "Sequence": ["down", "left", "up", "left", "left", "down"] },
 		{ "Name": "디에스컬레이터", "Sequence": ["down", "right", "up", "left", "right"] },
 		{ "Name": "스터릴라이저", "Sequence": ["down", "left", "up", "down", "left"] },
 		{ "Name": "화염방사기", "Sequence": ["down", "left", "up", "down", "up"] },

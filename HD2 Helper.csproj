@@ -21,7 +21,7 @@
 		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
 		<!-- GitHub 릴리스와 업데이터가 동일한 버전을 판별하도록 배포 버전을 함께 갱신한다. -->
 		<!-- 테스트 빌드는 정식판의 네 번째 자리만 올리고, 다음 정식판에서만 세 번째 자리를 올린다. -->
-		<Version>2.0.31.0</Version>
+		<Version>2.0.31.1-test</Version>
 		<GenerateAssemblyInfo>true</GenerateAssemblyInfo>
 	</PropertyGroup>
 

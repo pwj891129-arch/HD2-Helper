@@ -1634,11 +1634,12 @@ namespace HD2_Helper
                     .ToHashSet(StringComparer.Ordinal)
                 : new HashSet<string>(StringComparer.Ordinal);
 
-            // 이미 이 기본값을 받은 사용자는 수동 제외/해제 선택을 존중해 다시 덮어쓰지 않는다.
+            // 최초 실행에서만 신규 장비를 기본 제외한다. 기준 버전을 올릴 때마다 다시 합치면
+            // 사용자가 이미 해제한 장비까지 재차 제외되므로, 한 번 생성된 마커는 그대로 존중한다.
             string appliedVersion = File.Exists(DefaultExcludedEquipmentVersionPath)
                 ? File.ReadAllText(DefaultExcludedEquipmentVersionPath, Encoding.UTF8).Trim()
                 : string.Empty;
-            if (!string.Equals(appliedVersion, DefaultExcludedEquipmentVersion, StringComparison.Ordinal))
+            if (string.IsNullOrWhiteSpace(appliedVersion))
             {
                 items.UnionWith(DefaultExcludedNewEquipment);
                 SaveDisabledItems(items);
@@ -2511,10 +2512,10 @@ namespace HD2_Helper
             return IsGameActive() && !_isChat && !CursorUtil.IsVisible();
         }
 
-        private async Task TryTriggerAutoReloadAfterPrimaryReleaseAsync()
+        private async Task TryTriggerAutoReloadAfterInputSettlesAsync()
         {
-            // 발사키를 놓은 뒤 HUD가 안정적으로 장전 안내를 표시할 수 있도록 0.15초 후 재확인한다.
-            await Task.Delay(150);
+            // 발사키 해제 또는 무기 전환 뒤 HUD가 안정적으로 장전 안내를 표시할 수 있도록 0.2초 후 재확인한다.
+            await Task.Delay(200);
             await TryTriggerAutoReloadFromPrimaryAttackAsync();
         }
 
@@ -2819,9 +2820,10 @@ namespace HD2_Helper
             bool ctrl = IsPhysicalKeyDown(Keys.ControlKey) || IsPhysicalKeyDown(Keys.LControlKey) || IsPhysicalKeyDown(Keys.RControlKey);
             bool alt = IsPhysicalKeyDown(Keys.Menu) || IsPhysicalKeyDown(Keys.LMenu) || IsPhysicalKeyDown(Keys.RMenu);
 
-            if (vkCode is (uint)Keys.D1 or (uint)Keys.NumPad1 or (uint)Keys.D2 or (uint)Keys.NumPad2 or (uint)Keys.D4 or (uint)Keys.NumPad4)
+            if (vkCode is (uint)Keys.D1 or (uint)Keys.D2 or (uint)Keys.D4)
             {
-                // 주/보조/수류탄 슬롯으로 전환한 상태에서는 지원무기 차지 게이지가 뜨지 않도록 일시정지한다.
+                // 숫자열 주/보조/수류탄 슬롯 전환 시에만 지원무기 차지 게이지를 일시정지한다.
+                // 숫자패드 입력은 게임의 별도 단축키로 쓸 수 있으므로 무기 전환으로 취급하지 않는다.
                 _supportWeaponPausedByWeaponKey = true;
                 ResetSupportWeaponChargeState();
                 _supportWeaponGaugeForm?.Hide();
@@ -2829,9 +2831,9 @@ namespace HD2_Helper
                 return;
             }
 
-            if ((vkCode is (uint)Keys.D3 or (uint)Keys.NumPad3) && !ctrl && !alt)
+            if (vkCode == (uint)Keys.D3 && !ctrl && !alt)
             {
-                // 3번 지원무기 슬롯으로 돌아오면 기존 모드 설정은 유지한 채 보조 기능만 다시 켠다.
+                // 숫자열 3번 지원무기 슬롯으로 돌아오면 기존 모드 설정은 유지한 채 보조 기능만 다시 켠다.
                 _supportWeaponPausedByWeaponKey = false;
                 ResetSupportWeaponChargeState();
                 UpdateSupportWeaponGaugeOverlay();
@@ -2862,6 +2864,24 @@ namespace HD2_Helper
             return _supportWeaponSettings.GaugeAlwaysRefresh
                 || _isLeftMouseButtonDown
                 || (GetAsyncKeyState((int)Keys.LButton) & 0x8000) != 0;
+        }
+
+        private static bool IsUnmodifiedWeaponSwitchKey(uint vkCode)
+        {
+            if (vkCode is not ((uint)Keys.D1 or (uint)Keys.D2 or (uint)Keys.D3))
+                return false;
+
+            // 숫자열 1/2/3만 무기 슬롯 전환으로 판독한다. 숫자패드는 별도 단축키와 충돌하지 않도록 제외한다.
+            // Ctrl/Alt/Shift 조합은 사용자 단축키나 채팅 입력으로 쓸 수 있어 무기 전환 판독에서 제외한다.
+            return !IsPhysicalKeyDown(Keys.ControlKey)
+                && !IsPhysicalKeyDown(Keys.LControlKey)
+                && !IsPhysicalKeyDown(Keys.RControlKey)
+                && !IsPhysicalKeyDown(Keys.Menu)
+                && !IsPhysicalKeyDown(Keys.LMenu)
+                && !IsPhysicalKeyDown(Keys.RMenu)
+                && !IsPhysicalKeyDown(Keys.ShiftKey)
+                && !IsPhysicalKeyDown(Keys.LShiftKey)
+                && !IsPhysicalKeyDown(Keys.RShiftKey);
         }
 
         private void RefreshSupportWeaponGaugeTimerState()
@@ -3471,7 +3491,15 @@ namespace HD2_Helper
             }
 
             if (e.IsDown && !e.IsInjected)
+            {
                 UpdateSupportWeaponPauseFromWeaponKey(vkCode);
+
+                if (IsUnmodifiedWeaponSwitchKey(vkCode))
+                {
+                    // 주무기·보조무기·지원무기 전환 직후에도 중앙 장전 안내가 뜰 수 있어 같은 지연 검사로 보조한다.
+                    _ = Task.Run(TryTriggerAutoReloadAfterInputSettlesAsync);
+                }
+            }
 
             if (vkCode == (uint)Keys.RButton)
                 _isRightMouseButtonDown = e.IsDown;
@@ -3510,7 +3538,7 @@ namespace HD2_Helper
                     else
                     {
                         // 해제 후 HUD 갱신 확인도 훅 콜백을 점유하지 않도록 같은 작업 큐에서 처리한다.
-                        _ = Task.Run(TryTriggerAutoReloadAfterPrimaryReleaseAsync);
+                        _ = Task.Run(TryTriggerAutoReloadAfterInputSettlesAsync);
                     }
                 }
             }

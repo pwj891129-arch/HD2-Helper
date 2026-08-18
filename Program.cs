@@ -1392,13 +1392,12 @@ namespace HD2_Helper
                         ? idElement.GetString() ?? ""
                         : "";
 
-                    if (!string.Equals(_selectedPresetId, nextPresetId, StringComparison.Ordinal))
-                    {
-                        var preset = LoadPresetSummaries()
-                            .FirstOrDefault(item => string.Equals(item.Id, nextPresetId, StringComparison.Ordinal));
-                        if (preset != null)
-                            ApplyStratagemPreset(preset, closePresetOverlay: false);
-                    }
+                    // 화면이 먼저 탭 강조를 바꾼 경우에도 런타임에는 직전 프리셋 값이 남아 있을 수 있다.
+                    // 따라서 같은 ID가 다시 들어와도 저장된 프리셋 값을 항상 적용한다.
+                    var preset = LoadPresetSummaries()
+                        .FirstOrDefault(item => string.Equals(item.Id, nextPresetId, StringComparison.Ordinal));
+                    if (preset != null)
+                        ApplyStratagemPreset(preset, closePresetOverlay: false);
                 }
                 else if (type == "SET_SELECTED_EQUIPMENT_PRESET")
                 {
@@ -1453,6 +1452,9 @@ namespace HD2_Helper
                             {
                                 SaveSupportWeaponSettings();
                             }
+                            // 게이지/모드/시간은 선택한 스트라타젬 프리셋 소유 값이다. 전체 경고음 파일과
+                            // 분리해 현재 프리셋에 바로 기록해야 탭을 오갈 때 다른 프리셋 값과 섞이지 않는다.
+                            SaveCurrentPresetSupportWeaponSettings();
                             UpdateSupportWeaponGaugeOverlay();
                             RefreshSupportWeaponGaugeTimerState();
                             // F3에서 바꾼 지원무기 보조값도 원본 창의 현재 프리셋 표시와 즉시 맞춘다.
@@ -1747,6 +1749,37 @@ namespace HD2_Helper
             catch
             {
                 // 프리셋 파일을 읽을 수 없는 상태에서는 기존 선택 동작만 유지하고 저장은 건너뛴다.
+            }
+        }
+
+        private void SaveCurrentPresetSupportWeaponSettings()
+        {
+            if (string.IsNullOrWhiteSpace(_selectedPresetId))
+                return;
+
+            try
+            {
+                var root = JsonNode.Parse(LoadPresetsJson()) as JsonObject;
+                var stratagemPresets = root?["stratagemPresets"] as JsonArray;
+                if (stratagemPresets == null)
+                    return;
+
+                foreach (var node in stratagemPresets.OfType<JsonObject>())
+                {
+                    if (!string.Equals(node["id"]?.GetValue<string>(), _selectedPresetId, StringComparison.Ordinal))
+                        continue;
+
+                    // 경고음 설정은 파일에 따로 저장되지만, 프리셋 JSON에는 현재 지원무기 동작값을 완전한 형태로
+                    // 남긴다. 로드 시 전역 경고음 값만 다시 합쳐서 각 프리셋의 동작값을 복원한다.
+                    string supportJson = JsonSerializer.Serialize(_supportWeaponSettings.Normalized());
+                    node["supportWeapon"] = JsonNode.Parse(supportJson);
+                    SavePresets(root!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+                    return;
+                }
+            }
+            catch
+            {
+                // 프리셋 파일이 일시적으로 읽히지 않으면 현재 런타임 값은 유지하고 저장만 다음 변경까지 보류한다.
             }
         }
 

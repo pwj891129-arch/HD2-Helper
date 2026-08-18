@@ -656,6 +656,29 @@
             padding-left: calc(2px + var(--space-md));
         }
 
+        .support-duration-control {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 30px;
+            gap: var(--space-xs);
+            align-items: center;
+        }
+
+        .support-duration-commit {
+            height: 26px;
+            padding: 0;
+            border: 1px solid var(--hd-border);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--hd-text);
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+        }
+
+        .support-duration-commit:hover {
+            border-color: var(--hd-yellow);
+            color: var(--hd-yellow);
+        }
+
         .crosshair-control {
             width: 100%;
             min-width: 0;
@@ -1814,10 +1837,14 @@
                         <span class="setting-label">게이지 세로</span>
                         <input class="crosshair-control" type="range" min="4" max="80" step="1" data-support-weapon-setting="gaugeHeight">
                     </label>
-                    <label class="crosshair-row">
+                    <div class="crosshair-row">
                         <span class="setting-label">자동사격 시간</span>
-                        <input class="crosshair-control" type="text" inputmode="decimal" autocomplete="off" data-support-weapon-setting="autoFireReleaseSeconds">
-                    </label>
+                        <div class="support-duration-control">
+                            <input class="crosshair-control" type="text" inputmode="decimal" autocomplete="off" data-support-weapon-setting="autoFireReleaseSeconds">
+                            <!-- 입력 중에는 저장하지 않고 Enter 모양 버튼으로만 현재 프리셋에 확정한다. -->
+                            <button class="support-duration-commit" type="button" title="자동사격 시간 저장" aria-label="자동사격 시간 저장" onclick="commitAutoFireReleaseSecondsFromButton()">&#8629;</button>
+                        </div>
+                    </div>
                     <div class="setting-row" onclick="resetPresetSupportWeaponSettings()">
                         <span class="setting-label">프리셋 보조값 초기화</span>
                         <button class="setting-value-btn" type="button" tabindex="-1">기본값</button>
@@ -2595,6 +2622,11 @@
             }, 60);
         }
 
+        function saveSupportWeaponSettingsNow() {
+            clearTimeout(pendingSupportWeaponSettingsTimer);
+            postAppMessage({ type: 'SET_SUPPORT_WEAPON_SETTINGS', settings: currentSupportWeaponSettings });
+        }
+
         function resetPresetSupportWeaponSettings() {
             const warning = normalizeSupportWeaponSettings(currentSupportWeaponSettings || {});
             // 초기화는 프리셋별로 저장되는 값만 기본값으로 돌리고, 공통 경고음 설정은 그대로 둔다.
@@ -2631,7 +2663,15 @@
             currentSupportWeaponSettings = normalizeSupportWeaponSettings(currentSupportWeaponSettings || {});
             currentSupportWeaponSettings.autoFireReleaseSeconds = parsed;
             control.value = String(parsed);
-            queueSupportWeaponSettingsSave();
+            // 시간 값은 Enter 또는 확정 버튼을 누른 순간에만 C#과 현재 프리셋 파일로 보낸다.
+            saveSupportWeaponSettingsNow();
+        }
+
+        function commitAutoFireReleaseSecondsFromButton() {
+            const control = document.querySelector('[data-support-weapon-setting="autoFireReleaseSeconds"]');
+            if (!control) return;
+            commitAutoFireReleaseSecondsInput(control);
+            control.focus();
         }
 
         function openSupportWarningSoundFile() {
@@ -2709,17 +2749,11 @@
             }, 60);
         }
 
-        document.addEventListener('focusout', (e) => {
-            const control = e.target.closest('[data-support-weapon-setting="autoFireReleaseSeconds"]');
-            if (control) commitAutoFireReleaseSecondsInput(control);
-        });
-
         document.addEventListener('keydown', (e) => {
             const control = e.target.closest('[data-support-weapon-setting="autoFireReleaseSeconds"]');
             if (!control || e.key !== 'Enter') return;
             e.preventDefault();
             commitAutoFireReleaseSecondsInput(control);
-            control.blur();
         });
 
         document.addEventListener('input', (e) => {
@@ -2728,11 +2762,8 @@
                 currentSupportWeaponSettings = normalizeSupportWeaponSettings(currentSupportWeaponSettings || {});
                 const supportKey = supportControl.dataset.supportWeaponSetting;
                 if (supportKey === 'autoFireReleaseSeconds') {
-                    const parsed = parseAutoFireReleaseSecondsInput(supportControl.value);
-                    if (parsed !== null) {
-                        currentSupportWeaponSettings.autoFireReleaseSeconds = parsed;
-                        queueSupportWeaponSettingsSave();
-                    }
+                    // 숫자를 지우거나 소수점을 입력하는 중에는 기존 설정을 덮어쓰지 않는다.
+                    // Enter 또는 오른쪽 확정 버튼이 눌린 경우에만 commit 함수가 저장한다.
                     return;
                 }
 

@@ -4977,13 +4977,10 @@
             }
 
             selectedPresetId = id;
-            // 선택 ID를 먼저 앱에 알린 뒤, 스트라타젬/장비를 묶어서 적용한다. 중간 상태는 다른 창에 보내지 않는다.
+            // 프리셋 실제 적용은 C# 런타임이 단독으로 처리한다. 각 WebView가 값을 다시 적용하면
+            // 다른 탭의 지원무기 보조값이 마지막 메시지 순서에 따라 덮어써질 수 있다.
             saveSelectedPresetId();
-            await applyStratagemPresetLoadout(preset.loadout, preset.overlaySlots, false);
-            applyPresetSupportWeaponSettings(preset.supportWeapon);
-            applyLinkedEquipmentPreset(preset, true, false);
             renderPresetTabs();
-            syncCurrentLoadoutToApp();
 
             requestAnimationFrame(() => {
                 const container = document.getElementById('preset-tabs-bar');
@@ -5017,11 +5014,9 @@
 
             if (selectedPresetId === id) return;
 
-            // 앱에서 전달된 선택은 원본 창의 완성된 CURRENT_LOADOUT_SYNC가 뒤이어 오므로 여기서는 다시 전송하지 않는다.
+            // C#이 SETTINGS_LOADED와 CURRENT_LOADOUT_SYNC를 이어서 보내므로, 이 메시지는 탭 강조만 바꾼다.
+            // 여기서 지원무기 값을 재적용하면 다른 WebView와 적용 순서 경쟁이 생긴다.
             selectedPresetId = id;
-            await applyStratagemPresetLoadout(preset.loadout, preset.overlaySlots, false);
-            applyPresetSupportWeaponSettings(preset.supportWeapon);
-            applyLinkedEquipmentPreset(preset, false, false);
             renderPresetTabs();
         }
 
@@ -5246,6 +5241,12 @@
             selectedEquipmentPresetId = id;
             if (saveSelection) {
                 saveSelectedEquipmentPresetId();
+            }
+            if (saveSelection) {
+                // 장비도 C# 런타임이 적용한 뒤 CURRENT_LOADOUT_SYNC를 보내므로, WebView는 선택 표시만 갱신한다.
+                // 이 창이 현재 스트라타젬 프리셋의 편집 상태를 먼저 내보내는 것을 막는다.
+                renderEquipmentPresetTabs();
+                return;
             }
             // 장비 선택은 현재 스트라타젬 상태와 합친 뒤 단 한 번만 다른 창으로 동기화한다.
             await applyEquipmentPresetLoadout(preset.loadout, false);

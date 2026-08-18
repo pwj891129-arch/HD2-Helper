@@ -1386,17 +1386,18 @@ namespace HD2_Helper
                 }
                 else if (type == "SET_SELECTED_PRESET")
                 {
-                    // WebView에서 직접 고른 선택만 settings.ini에 저장하고, 다른 창에는 단방향으로만 동기화한다.
+                    // WebView마다 지원무기 보조값을 따로 적용하면 F3/기본 창이 서로 다른 프리셋 값을
+                    // 다시 보내며 마지막 수신값으로 덮어쓸 수 있다. 프리셋 적용은 C# 런타임 한 곳에서만 한다.
                     string nextPresetId = doc.RootElement.TryGetProperty("id", out var idElement)
                         ? idElement.GetString() ?? ""
                         : "";
 
                     if (!string.Equals(_selectedPresetId, nextPresetId, StringComparison.Ordinal))
                     {
-                        _selectedPresetId = nextPresetId;
-                        SaveSetting();
-                        SendSettingsToWeb();
-                        SendPresetSelectionToWeb(_selectedPresetId);
+                        var preset = LoadPresetSummaries()
+                            .FirstOrDefault(item => string.Equals(item.Id, nextPresetId, StringComparison.Ordinal));
+                        if (preset != null)
+                            ApplyStratagemPreset(preset, closePresetOverlay: false);
                     }
                 }
                 else if (type == "SET_SELECTED_EQUIPMENT_PRESET")
@@ -1407,10 +1408,10 @@ namespace HD2_Helper
 
                     if (!string.Equals(_selectedEquipmentPresetId, nextPresetId, StringComparison.Ordinal))
                     {
-                        _selectedEquipmentPresetId = nextPresetId;
-                        SaveSetting();
-                        SendSettingsToWeb();
-                        SendEquipmentPresetSelectionToWeb(_selectedEquipmentPresetId);
+                        var preset = LoadEquipmentPresetSummaries()
+                            .FirstOrDefault(item => string.Equals(item.Id, nextPresetId, StringComparison.Ordinal));
+                        if (preset != null)
+                            ApplyEquipmentPreset(preset, closePresetOverlay: false);
                     }
                 }
                 else if (type == "SET_CROSSHAIR_SETTINGS")
@@ -4332,6 +4333,11 @@ namespace HD2_Helper
 
         private void ApplyStratagemPresetFromOverlay(PresetSummary preset)
         {
+            ApplyStratagemPreset(preset, closePresetOverlay: true);
+        }
+
+        private void ApplyStratagemPreset(PresetSummary preset, bool closePresetOverlay)
+        {
             _selectedPresetId = preset.Id;
             // 프리셋 오버레이로 바꿀 때도 게임 안에는 직전 슬롯이 남아 있으므로 OCR 실패 시 보조 시작점으로 보관한다.
             _previousStratagemSlots = _currentSlots.ToArray();
@@ -4359,16 +4365,26 @@ namespace HD2_Helper
             }
 
             SaveSetting();
+            // 지원무기 보조값은 프리셋 전환의 일부다. 선택 알림보다 먼저 같은 런타임 값을 모든 WebView에 보낸다.
+            SendSettingsToWeb();
             SendPresetSelectionToWeb(preset.Id);
             if (linkedEquipmentPreset != null)
                 SendEquipmentPresetSelectionToWeb(linkedEquipmentPreset.Id);
             SendCurrentLoadoutToWeb();
-            _presetOverlayRequestedVisible = false;
-            _presetOverlayForm?.Hide();
-            RestoreGameFocus();
+            if (closePresetOverlay)
+            {
+                _presetOverlayRequestedVisible = false;
+                _presetOverlayForm?.Hide();
+                RestoreGameFocus();
+            }
         }
 
         private void ApplyEquipmentPresetFromOverlay(EquipmentPresetSummary preset)
+        {
+            ApplyEquipmentPreset(preset, closePresetOverlay: true);
+        }
+
+        private void ApplyEquipmentPreset(EquipmentPresetSummary preset, bool closePresetOverlay)
         {
             _selectedEquipmentPresetId = preset.Id;
             _currentLoadoutSlots = new[]
@@ -4384,11 +4400,15 @@ namespace HD2_Helper
                 SendPresetsToWeb();
             }
             SaveSetting();
+            SendSettingsToWeb();
             SendEquipmentPresetSelectionToWeb(preset.Id);
             SendCurrentLoadoutToWeb();
-            _presetOverlayRequestedVisible = false;
-            _presetOverlayForm?.Hide();
-            RestoreGameFocus();
+            if (closePresetOverlay)
+            {
+                _presetOverlayRequestedVisible = false;
+                _presetOverlayForm?.Hide();
+                RestoreGameFocus();
+            }
         }
 
         private void RestoreGameFocus()

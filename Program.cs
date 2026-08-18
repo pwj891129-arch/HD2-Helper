@@ -247,6 +247,8 @@ namespace HD2_Helper
         private static bool _excludeOverlaysFromCapture;
         // 기본 OFF: 중앙의 "무기 장전" 안내가 보일 때만 공격 입력에 재장전을 보조한다.
         private static bool _autoReloadEnabled;
+        // 실제 R 입력을 보낸 뒤 다음 자동 재장전 입력을 막는 전체 공통 쿨타임이다.
+        private static int _autoReloadCooldownMs = 1000;
         private static AutoReloadSettings _autoReloadSettings = new();
         private static string _selectedPresetId = "";
         // 스트라타젬과 장비는 독립적으로 조합할 수 있으므로 마지막 선택값도 각각 보존한다.
@@ -1327,6 +1329,16 @@ namespace HD2_Helper
                         SendSettingsToWeb();
                     }
                 }
+                else if (type == "SET_AUTO_RELOAD_COOLDOWN")
+                {
+                    if (doc.RootElement.TryGetProperty("value", out var valueElement) && valueElement.TryGetInt32(out int value))
+                    {
+                        // UI는 초 단위로 보여주되, 입력 처리에는 정수 밀리초를 써 일정한 쿨타임을 유지한다.
+                        _autoReloadCooldownMs = Math.Clamp(value, 100, 10000);
+                        SaveSetting();
+                        SendSettingsToWeb();
+                    }
+                }
                 else if (type == "SET_SETTINGS_PANEL_COLLAPSED")
                 {
                     if (doc.RootElement.TryGetProperty("collapsed", out var collapsedElement))
@@ -1945,6 +1957,11 @@ namespace HD2_Helper
                     if (!uint.TryParse(value, out uint vk)) continue;
                     _autoReloadEnabled = vk != 0;
                 }
+                else if (key.Equals("autoReloadCooldownMs", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (int.TryParse(value, out int cooldownMs))
+                        _autoReloadCooldownMs = Math.Clamp(cooldownMs, 100, 10000);
+                }
                 else if (key.Equals("autoReload.promptRegionVersion", StringComparison.OrdinalIgnoreCase))
                 {
                     // 3 이전 기본 영역은 HUD 커브가 큰 경우 높이가 부족하므로, 기존 사용자 보정값과 구분해 한 번만 새 기준값으로 교체한다.
@@ -2052,6 +2069,7 @@ namespace HD2_Helper
                 $"muteGameAudioWhenInactive={(_muteGameAudioWhenInactive ? 1 : 0)}",
                 $"excludeOverlaysFromCapture={(_excludeOverlaysFromCapture ? 1 : 0)}",
                 $"autoReloadEnabled={(_autoReloadEnabled ? 1 : 0)}",
+                $"autoReloadCooldownMs={Math.Clamp(_autoReloadCooldownMs, 100, 10000)}",
                 $"autoReload.promptRegionVersion=3",
                 $"autoReload.x={_autoReloadSettings.Normalized().X}",
                 $"autoReload.y={_autoReloadSettings.Normalized().Y}",
@@ -2308,6 +2326,7 @@ namespace HD2_Helper
                 muteGameAudioWhenInactive = _muteGameAudioWhenInactive,
                 excludeOverlaysFromCapture = _excludeOverlaysFromCapture,
                 autoReloadEnabled = _autoReloadEnabled,
+                autoReloadCooldownMs = Math.Clamp(_autoReloadCooldownMs, 100, 10000),
                 selectedPresetId = _selectedPresetId,
                 selectedEquipmentPresetId = _selectedEquipmentPresetId,
                 crosshair = _crosshairSettings.Normalized(),
@@ -2485,14 +2504,17 @@ namespace HD2_Helper
             await _autoReloadCheckGate.WaitAsync();
             try
             {
-                AutoReloadDetectionResult result = await DetectReloadPromptAsync();
                 DateTime now = DateTime.UtcNow;
-                _lastAutoReloadDetection = result;
-
-                if (!result.IsEmpty || now - _lastAutoReloadAttemptAt < TimeSpan.FromMilliseconds(100))
+                if (now - _lastAutoReloadAttemptAt < TimeSpan.FromMilliseconds(Math.Clamp(_autoReloadCooldownMs, 100, 10000)))
                     return;
 
-                // 중앙 안내가 실제로 보인 발사 시점에만 R을 탭한다. 쿨타임은 입력 직후부터 0.1초다.
+                AutoReloadDetectionResult result = await DetectReloadPromptAsync();
+                _lastAutoReloadDetection = result;
+
+                if (!result.IsEmpty)
+                    return;
+
+                // 중앙 안내가 실제로 보인 발사 시점에만 R을 탭한다. 쿨타임은 실제 입력 직후부터 시작한다.
                 TriggerAutoReloadTap();
             }
             catch
@@ -2524,7 +2546,7 @@ namespace HD2_Helper
             try
             {
                 SendInput((uint)Keys.R, true);
-                // 실제 재장전 명령을 보낸 뒤부터만 0.1초 재시도 제한을 적용한다.
+                // 재장전 명령을 보낸 뒤부터만 설정된 자동 재장전 쿨타임을 적용한다.
                 _lastAutoReloadAttemptAt = DateTime.UtcNow;
                 await Task.Delay(Math.Min(Math.Max(_inputDelay, 25), 60));
             }

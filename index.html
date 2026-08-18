@@ -1673,6 +1673,10 @@
                         <span class="setting-label">자동 재장전</span>
                         <input id="setting-auto-reload" type="checkbox" onchange="toggleAutoReload(this.checked)">
                     </label>
+                    <label class="crosshair-row">
+                        <span class="setting-label">자동 재장전 쿨타임(초)</span>
+                        <input id="setting-auto-reload-cooldown" class="setting-number-control" type="number" min="0.1" max="10" step="0.1" inputmode="decimal" onchange="updateAutoReloadCooldown(this.value)" onblur="updateAutoReloadCooldown(this.value)">
+                    </label>
                     <div class="setting-row" onclick="openAutoReloadCalibration()">
                         <span class="setting-label">자동 재장전 안내 보정</span>
                         <button class="setting-value-btn" type="button" tabindex="-1">열기</button>
@@ -2334,6 +2338,21 @@
             postAppMessage({ type: 'SET_AUTO_RELOAD_ENABLED', enabled: enabled === true });
         }
 
+        function updateAutoReloadCooldown(value) {
+            const input = document.getElementById('setting-auto-reload-cooldown');
+            const seconds = Number(value);
+            if (!Number.isFinite(seconds)) {
+                if (input) input.value = ((Number(window.autoReloadCooldownMs) || 1000) / 1000).toFixed(1);
+                return;
+            }
+
+            // 사용자는 초 단위로 조절하고, 앱에는 0.1초 단위의 정수 밀리초만 전달한다.
+            const normalizedSeconds = Math.max(0.1, Math.min(10, Math.round(seconds * 10) / 10));
+            window.autoReloadCooldownMs = Math.round(normalizedSeconds * 1000);
+            if (input) input.value = normalizedSeconds.toFixed(1);
+            postAppMessage({ type: 'SET_AUTO_RELOAD_COOLDOWN', value: window.autoReloadCooldownMs });
+        }
+
         function toggleStratagemReselectEnabled(enabled) {
             // 재선택을 끄면 자동선택은 OCR 보정 없이 프리셋 좌표만 따라가므로 빈 슬롯 최초 선택에 적합하다.
             stratagemReselectEnabled = enabled === true;
@@ -2785,6 +2804,8 @@
             muteGameAudioWhenInactive = data.muteGameAudioWhenInactive === true;
             excludeOverlaysFromCapture = data.excludeOverlaysFromCapture === true;
             const autoReloadEnabled = data.autoReloadEnabled === true;
+            const autoReloadCooldownMs = Math.max(100, Math.min(10000, Number(data.autoReloadCooldownMs) || 1000));
+            window.autoReloadCooldownMs = autoReloadCooldownMs;
             const stratagemReselectControl = document.getElementById('setting-stratagem-reselect-enabled');
             if (stratagemReselectControl) stratagemReselectControl.checked = stratagemReselectEnabled;
             const presetAutoSaveControl = document.getElementById('setting-preset-auto-save');
@@ -2804,6 +2825,8 @@
             if (excludeCaptureControl) excludeCaptureControl.checked = excludeOverlaysFromCapture;
             const autoReloadControl = document.getElementById('setting-auto-reload');
             if (autoReloadControl) autoReloadControl.checked = autoReloadEnabled;
+            const autoReloadCooldownControl = document.getElementById('setting-auto-reload-cooldown');
+            if (autoReloadCooldownControl) autoReloadCooldownControl.value = (autoReloadCooldownMs / 1000).toFixed(1);
 
             const keys = data.keys || {};
             if (String(data.waitingTarget || '').startsWith('manualStratagem')) {
@@ -2826,10 +2849,11 @@
             renderSlotKeySettings(keys.slots || [], data.waitingTarget);
             renderCrosshairSettings(data.crosshair || currentCrosshairSettings || {});
             const globalSupportWeaponSettings = normalizeSupportWeaponSettings(data.supportWeapon || currentSupportWeaponSettings || {});
-            const selectedPreset = presets.find(item => item.id === selectedPresetId);
-            renderSupportWeaponSettings(selectedPreset
-                ? mergeGlobalWarningWithPresetSupport(globalSupportWeaponSettings, selectedPreset.supportWeapon)
-                : globalSupportWeaponSettings);
+            // SETTINGS_LOADED는 입력값이 런타임에 적용된 뒤에도 도착한다. 여기서 프리셋의 저장본을
+            // 우선하면 자동저장이 꺼진 상태에서 편집 중인 값이 이전 값으로 즉시 되돌아간다.
+            // 프리셋 전환 시에는 C#이 현재 런타임 값을 이미 해당 프리셋 값으로 교체하므로,
+            // 항상 런타임 설정을 렌더링해야 입력 중인 값과 실제 게이지 동작이 일치한다.
+            renderSupportWeaponSettings(globalSupportWeaponSettings);
             applyPendingSelectedPreset();
         }
 

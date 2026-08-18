@@ -658,25 +658,37 @@
 
         .support-duration-control {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) 30px;
-            gap: var(--space-xs);
+            grid-template-columns: minmax(0, 1fr) 36px;
+            gap: 6px;
             align-items: center;
+        }
+
+        .support-duration-control .crosshair-control {
+            /* 입력칸이 버튼 열까지 침범하지 않도록 실제 그리드 폭 안에서 계산한다. */
+            box-sizing: border-box;
         }
 
         .support-duration-commit {
             height: 26px;
-            padding: 0;
-            border: 1px solid var(--hd-border);
-            background: rgba(255, 255, 255, 0.05);
-            color: var(--hd-text);
+            min-width: 36px;
+            padding: 0 2px;
+            border: 1px solid var(--hd-yellow);
+            background: #3b3314;
+            color: var(--hd-yellow);
             cursor: pointer;
-            font-size: 16px;
+            font-size: 18px;
+            font-weight: 700;
             line-height: 1;
         }
 
         .support-duration-commit:hover {
-            border-color: var(--hd-yellow);
-            color: var(--hd-yellow);
+            background: #5a4d18;
+            color: #fff4a3;
+        }
+
+        .support-duration-commit:active {
+            background: var(--hd-yellow);
+            color: #171717;
         }
 
         .crosshair-control {
@@ -1842,7 +1854,7 @@
                         <div class="support-duration-control">
                             <input class="crosshair-control" type="text" inputmode="decimal" autocomplete="off" data-support-weapon-setting="autoFireReleaseSeconds">
                             <!-- 입력 중에는 저장하지 않고 Enter 모양 버튼으로만 현재 프리셋에 확정한다. -->
-                            <button class="support-duration-commit" type="button" title="자동사격 시간 저장" aria-label="자동사격 시간 저장" onclick="commitAutoFireReleaseSecondsFromButton()">&#8629;</button>
+                            <button class="support-duration-commit" type="button" title="자동사격 시간 저장" aria-label="자동사격 시간 저장" onmousedown="event.preventDefault()" onclick="commitAutoFireReleaseSecondsFromButton()">&#8629;</button>
                         </div>
                     </div>
                     <div class="setting-row" onclick="resetPresetSupportWeaponSettings()">
@@ -2657,6 +2669,7 @@
             if (parsed === null) {
                 // 자동사격 시간 입력이 비었거나 숫자로 해석되지 않으면 마지막으로 저장된 값으로 되돌린다.
                 revertAutoFireReleaseSecondsInput(control);
+                control.blur();
                 return;
             }
 
@@ -2665,13 +2678,14 @@
             control.value = String(parsed);
             // 시간 값은 Enter 또는 확정 버튼을 누른 순간에만 C#과 현재 프리셋 파일로 보낸다.
             saveSupportWeaponSettingsNow();
+            // Enter와 버튼 저장 뒤에는 입력 포커스를 해제해 게임 조작으로 바로 돌아갈 수 있게 한다.
+            control.blur();
         }
 
         function commitAutoFireReleaseSecondsFromButton() {
             const control = document.querySelector('[data-support-weapon-setting="autoFireReleaseSeconds"]');
             if (!control) return;
             commitAutoFireReleaseSecondsInput(control);
-            control.focus();
         }
 
         function openSupportWarningSoundFile() {

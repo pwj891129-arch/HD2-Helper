@@ -8181,6 +8181,10 @@ namespace HD2_Helper
                     const ulong maxAddress = 0x00007FFFFFFEFFFF;
                     ulong address = startAddress;
                     ulong scannedBytes = 0;
+                    int readablePrivateRegions = 0;
+                    int readAttempts = 0;
+                    int readFailures = 0;
+                    int lastReadError = 0;
                     DateTime lastProgress = DateTime.UtcNow;
                     int mbiSize = Marshal.SizeOf<MemoryBasicInformation>();
 
@@ -8207,7 +8211,17 @@ namespace HD2_Helper
 
                         if (IsReadablePrivateRegion(mbi))
                         {
-                            ScanMemoryRegion(handle, regionBase, regionSize, targetValue, matches, ref scannedBytes);
+                            readablePrivateRegions++;
+                            ScanMemoryRegion(
+                                handle,
+                                regionBase,
+                                regionSize,
+                                targetValue,
+                                matches,
+                                ref scannedBytes,
+                                ref readAttempts,
+                                ref readFailures,
+                                ref lastReadError);
                             if (DateTime.UtcNow - lastProgress > TimeSpan.FromMilliseconds(250))
                             {
                                 progress($"읽기 전용 탐색 중... {scannedBytes / (1024 * 1024)} MB, 후보 {matches.Count}개");
@@ -8218,7 +8232,9 @@ namespace HD2_Helper
                         address = nextAddress;
                     }
 
-                    string note = matches.Count >= MaxCandidateCount
+                    string note = scannedBytes == 0
+                        ? $"읽기 가능한 개인 영역 {readablePrivateRegions}개를 확인했지만 0MB만 읽혔습니다. 읽기 실패 {readFailures}/{readAttempts}회, 마지막 Windows 오류 {lastReadError}."
+                        : matches.Count >= MaxCandidateCount
                         ? $"후보가 {MaxCandidateCount}개에 도달해 탐색을 중단했습니다. 더 특이한 탄약 수로 다시 시작하세요."
                         : $"읽기 전용 탐색 완료: {scannedBytes / (1024 * 1024)} MB에서 후보 {matches.Count}개를 찾았습니다.";
                     return new AmmoMemoryScanResult(processId, matches, note, "");
@@ -8357,7 +8373,16 @@ namespace HD2_Helper
                     && (protection & 0xFF) != 0;
             }
 
-            private static void ScanMemoryRegion(IntPtr handle, ulong regionBase, ulong regionSize, int targetValue, List<IntPtr> matches, ref ulong scannedBytes)
+            private static void ScanMemoryRegion(
+                IntPtr handle,
+                ulong regionBase,
+                ulong regionSize,
+                int targetValue,
+                List<IntPtr> matches,
+                ref ulong scannedBytes,
+                ref int readAttempts,
+                ref int readFailures,
+                ref int lastReadError)
             {
                 byte[] target = BitConverter.GetBytes(targetValue);
                 byte[] buffer = new byte[ScanChunkSize];
@@ -8366,8 +8391,13 @@ namespace HD2_Helper
                 {
                     int requested = (int)Math.Min((ulong)buffer.Length, regionEnd - (regionBase + offset));
                     IntPtr address = new IntPtr(unchecked((long)(regionBase + offset)));
+                    readAttempts++;
                     if (!ReadProcessMemory(handle, address, buffer, new IntPtr(requested), out IntPtr read) || read.ToInt64() < sizeof(int))
+                    {
+                        readFailures++;
+                        lastReadError = Marshal.GetLastWin32Error();
                         continue;
+                    }
 
                     int readable = (int)Math.Min(read.ToInt64(), requested);
                     scannedBytes += (ulong)readable;

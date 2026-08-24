@@ -1716,6 +1716,10 @@
                         <span class="setting-label">자동 재장전 안내 보정</span>
                         <button class="setting-value-btn" type="button" tabindex="-1">열기</button>
                     </div>
+                    <div class="setting-row" onclick="openAmmoMemoryScanner()">
+                        <span class="setting-label">탄약 메모리 찾기 (테스트)</span>
+                        <button class="setting-value-btn" type="button" tabindex="-1">열기</button>
+                    </div>
                     <div class="setting-row" data-setting-row="autoSelectKey" onclick="startKeyCapture('autoSelectKey')">
                         <span class="setting-label">자동선택 단축키</span>
                         <button class="setting-key-btn" type="button" data-setting-key="autoSelectKey" tabindex="-1"></button>
@@ -2390,6 +2394,11 @@
             window.autoReloadCooldownMs = Math.round(normalizedSeconds * 1000);
             if (input) input.value = normalizedSeconds.toFixed(1);
             postAppMessage({ type: 'SET_AUTO_RELOAD_COOLDOWN', value: window.autoReloadCooldownMs });
+        }
+
+        function openAmmoMemoryScanner() {
+            // 자동 재장전과 분리된 읽기 전용 진단창으로, 사용자가 입력한 탄약 수의 메모리 후보만 찾는다.
+            postAppMessage({ type: 'OPEN_AMMO_MEMORY_SCANNER' });
         }
 
         function toggleStratagemReselectEnabled(enabled) {

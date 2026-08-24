@@ -157,6 +157,7 @@ namespace HD2_Helper
         private CrosshairEditorForm? _crosshairEditorForm;
         private OcrRegionSettingsForm? _ocrRegionSettingsForm;
         private AutoReloadCalibrationForm? _autoReloadCalibrationForm;
+        private AmmoMemoryScannerForm? _ammoMemoryScannerForm;
         private System.Windows.Forms.Timer? _crosshairTimer;
         private System.Windows.Forms.Timer? _supportWeaponGaugeTimer;
         private System.Windows.Forms.Timer? _autoReloadDetectionTimer;
@@ -375,6 +376,49 @@ namespace HD2_Helper
 
         [DllImport("winmm.dll", CharSet = CharSet.Unicode)]
         private static extern int mciSendString(string command, StringBuilder? returnValue, int returnLength, IntPtr winHandle);
+
+        // 탄약 탐색 테스트는 QUERY_INFORMATION | VM_READ 권한만 요청한다. 쓰기 권한이나 프로세스 우회는 사용하지 않는다.
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, int processId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool ReadProcessMemory(
+            IntPtr processHandle,
+            IntPtr baseAddress,
+            [Out] byte[] buffer,
+            IntPtr size,
+            out IntPtr bytesRead);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern UIntPtr VirtualQueryEx(
+            IntPtr processHandle,
+            IntPtr address,
+            out MemoryBasicInformation buffer,
+            UIntPtr length);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr handle);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MemoryBasicInformation
+        {
+            public IntPtr BaseAddress;
+            public IntPtr AllocationBase;
+            public uint AllocationProtect;
+            public ushort PartitionId;
+            public ushort Padding;
+            public UIntPtr RegionSize;
+            public uint State;
+            public uint Protect;
+            public uint Type;
+        }
+
+        private const uint ProcessQueryInformation = 0x0400;
+        private const uint ProcessVmRead = 0x0010;
+        private const uint MemCommit = 0x1000;
+        private const uint MemPrivate = 0x20000;
+        private const uint PageNoAccess = 0x01;
+        private const uint PageGuard = 0x100;
 
         private static readonly IntPtr HWND_TOPMOST = new(-1);
         private const uint SWP_NOSIZE = 0x0001;
@@ -1488,6 +1532,10 @@ namespace HD2_Helper
                 else if (type == "OPEN_AUTO_RELOAD_CALIBRATION")
                 {
                     OpenAutoReloadCalibration();
+                }
+                else if (type == "OPEN_AMMO_MEMORY_SCANNER")
+                {
+                    OpenAmmoMemoryScanner();
                 }
                 else if (type == "OPEN_PRESET_OVERLAY")
                 {
@@ -3347,6 +3395,20 @@ namespace HD2_Helper
         private Task<AutoReloadDetectionResult> TestAutoReloadDetectionAsync(AutoReloadSettings settings)
         {
             return DetectReloadPromptAsync(settings);
+        }
+
+        private void OpenAmmoMemoryScanner()
+        {
+            if (_ammoMemoryScannerForm == null || _ammoMemoryScannerForm.IsDisposed)
+            {
+                // 게임 메모리는 절대 수정하지 않고, 사용자가 직접 관찰한 탄약 수를 기준으로 읽기 전용 후보만 찾는다.
+                _ammoMemoryScannerForm = new AmmoMemoryScannerForm();
+                _ammoMemoryScannerForm.FormClosed += (_, _) => _ammoMemoryScannerForm = null;
+            }
+
+            _ammoMemoryScannerForm.Show();
+            ApplyCaptureExclusion(_ammoMemoryScannerForm);
+            _ammoMemoryScannerForm.Activate();
         }
 
         private void ApplyOcrRegionSettings(Dictionary<string, OcrRegionSettings> settings)
@@ -7901,6 +7963,491 @@ namespace HD2_Helper
                 && normalized.Height == 200
                 && normalized.BorderThickness == 2
                 && normalized.MinimumPromptMatches == 1;
+        }
+
+        private sealed class AmmoMemoryScannerForm : Form
+        {
+            private const int ScanChunkSize = 256 * 1024;
+            private const int MaxCandidateCount = 5000;
+            private readonly NumericUpDown ammoInput = new();
+            private readonly Button scanButton = new();
+            private readonly Button filterButton = new();
+            private readonly Button inspectButton = new();
+            private readonly Label statusLabel = new();
+            private readonly TextBox candidateOutput = new();
+            private readonly List<IntPtr> candidateAddresses = new();
+            private int scannedProcessId;
+            private bool isScanning;
+
+            public AmmoMemoryScannerForm()
+            {
+                // 이 창은 개발/검증용이며 메모리 쓰기나 게임 입력을 절대 수행하지 않는다.
+                Text = "탄약 메모리 찾기 (읽기 전용 테스트)";
+                ClientSize = new Size(620, 460);
+                MinimumSize = new Size(620, 460);
+                StartPosition = FormStartPosition.CenterScreen;
+                BackColor = Color.FromArgb(35, 35, 35);
+                ForeColor = Color.White;
+
+                BuildLayout();
+            }
+
+            private void BuildLayout()
+            {
+                var root = new TableLayoutPanel
+                {
+                    Dock = DockStyle.Fill,
+                    Padding = new Padding(16),
+                    ColumnCount = 2,
+                    RowCount = 6,
+                    BackColor = BackColor
+                };
+                root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 38));
+                root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 62));
+                root.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+                root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+                root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+                root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+                root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+                root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+                Controls.Add(root);
+
+                var description = new Label
+                {
+                    Text = "현재 화면에 보이는 탄창 수를 입력한 뒤 후보를 찾습니다. 한 발 쏜 뒤 새 값을 입력해 필터링하세요.",
+                    AutoSize = false,
+                    Dock = DockStyle.Fill,
+                    ForeColor = Color.Gainsboro,
+                    TextAlign = ContentAlignment.MiddleLeft
+                };
+                root.SetColumnSpan(description, 2);
+                root.Controls.Add(description, 0, 0);
+
+                var ammoLabel = new Label
+                {
+                    Text = "관찰한 현재 탄창 수",
+                    Dock = DockStyle.Fill,
+                    TextAlign = ContentAlignment.MiddleLeft,
+                    ForeColor = Color.Gainsboro
+                };
+                root.Controls.Add(ammoLabel, 0, 1);
+
+                ammoInput.Dock = DockStyle.Fill;
+                ammoInput.Minimum = 0;
+                ammoInput.Maximum = 99999;
+                ammoInput.Value = 1;
+                ammoInput.BackColor = Color.FromArgb(25, 25, 25);
+                ammoInput.ForeColor = Color.White;
+                root.Controls.Add(ammoInput, 1, 1);
+
+                scanButton.Text = "새 후보 찾기";
+                scanButton.Click += async (_, _) => await StartScanAsync();
+                root.Controls.Add(CreateButton(scanButton), 0, 2);
+
+                filterButton.Text = "새 값으로 후보 필터";
+                filterButton.Enabled = false;
+                filterButton.Click += async (_, _) => await FilterCandidatesAsync();
+                root.Controls.Add(CreateButton(filterButton), 1, 2);
+
+                inspectButton.Text = "후보 값 확인";
+                inspectButton.Enabled = false;
+                inspectButton.Click += async (_, _) => await InspectCandidatesAsync();
+                root.SetColumnSpan(inspectButton, 2);
+                root.Controls.Add(CreateButton(inspectButton), 0, 3);
+
+                statusLabel.AutoSize = false;
+                statusLabel.Dock = DockStyle.Fill;
+                statusLabel.ForeColor = Color.Gainsboro;
+                statusLabel.TextAlign = ContentAlignment.MiddleLeft;
+                statusLabel.Text = "대기 중: 이 기능은 읽기만 수행하며 게임 입력·메모리 쓰기를 하지 않습니다.";
+                root.SetColumnSpan(statusLabel, 2);
+                root.Controls.Add(statusLabel, 0, 4);
+
+                candidateOutput.Dock = DockStyle.Fill;
+                candidateOutput.Multiline = true;
+                candidateOutput.ReadOnly = true;
+                candidateOutput.ScrollBars = ScrollBars.Vertical;
+                candidateOutput.BackColor = Color.FromArgb(25, 25, 25);
+                candidateOutput.ForeColor = Color.Gainsboro;
+                candidateOutput.Font = new Font(Font.FontFamily, 9f);
+                root.SetColumnSpan(candidateOutput, 2);
+                root.Controls.Add(candidateOutput, 0, 5);
+            }
+
+            private static Button CreateButton(Button button)
+            {
+                button.Dock = DockStyle.Fill;
+                button.BackColor = Color.FromArgb(48, 48, 48);
+                button.ForeColor = Color.White;
+                button.FlatStyle = FlatStyle.Flat;
+                button.Margin = new Padding(4);
+                return button;
+            }
+
+            private async Task StartScanAsync()
+            {
+                if (isScanning)
+                    return;
+
+                int targetValue = decimal.ToInt32(ammoInput.Value);
+                SetScanState(true, "게임 메모리의 읽기 가능한 개인 영역을 확인 중입니다...");
+                candidateOutput.Clear();
+
+                try
+                {
+                    AmmoMemoryScanResult result = await Task.Run(() => ScanForValue(targetValue, progress => SetStatus(progress)));
+                    candidateAddresses.Clear();
+                    candidateAddresses.AddRange(result.Addresses);
+                    scannedProcessId = result.ProcessId;
+                    filterButton.Enabled = candidateAddresses.Count > 0;
+                    inspectButton.Enabled = candidateAddresses.Count > 0;
+                    candidateOutput.Text = FormatAddresses(candidateAddresses, "첫 탐색 결과");
+                    SetStatus(result.Note);
+                    AppendDiagnosticLog($"scan value={targetValue}, pid={result.ProcessId}, candidates={candidateAddresses.Count}, note={result.Note}");
+                }
+                catch (Exception ex)
+                {
+                    SetStatus($"탐색 실패: {ex.Message}");
+                    AppendDiagnosticLog($"scan failed: {ex.Message}");
+                }
+                finally
+                {
+                    SetScanState(false, null);
+                }
+            }
+
+            private async Task FilterCandidatesAsync()
+            {
+                if (isScanning || candidateAddresses.Count == 0)
+                    return;
+
+                int targetValue = decimal.ToInt32(ammoInput.Value);
+                SetScanState(true, "이전 후보의 현재 값을 읽는 중입니다...");
+
+                try
+                {
+                    AmmoMemoryScanResult result = await Task.Run(() => FilterForValue(scannedProcessId, candidateAddresses, targetValue));
+                    candidateAddresses.Clear();
+                    candidateAddresses.AddRange(result.Addresses);
+                    filterButton.Enabled = candidateAddresses.Count > 0;
+                    inspectButton.Enabled = candidateAddresses.Count > 0;
+                    candidateOutput.Text = FormatAddresses(candidateAddresses, "필터 결과");
+                    SetStatus(result.Note);
+                    AppendDiagnosticLog($"filter value={targetValue}, pid={result.ProcessId}, candidates={candidateAddresses.Count}, note={result.Note}");
+                }
+                catch (Exception ex)
+                {
+                    SetStatus($"필터 실패: {ex.Message}");
+                    AppendDiagnosticLog($"filter failed: {ex.Message}");
+                }
+                finally
+                {
+                    SetScanState(false, null);
+                }
+            }
+
+            private async Task InspectCandidatesAsync()
+            {
+                if (isScanning || candidateAddresses.Count == 0)
+                    return;
+
+                SetScanState(true, "후보의 현재 값을 확인 중입니다...");
+                try
+                {
+                    AmmoMemoryScanResult result = await Task.Run(() => ReadCandidateValues(scannedProcessId, candidateAddresses));
+                    candidateOutput.Text = result.Details;
+                    SetStatus(result.Note);
+                    AppendDiagnosticLog($"inspect pid={result.ProcessId}, candidates={candidateAddresses.Count}, note={result.Note}");
+                }
+                catch (Exception ex)
+                {
+                    SetStatus($"확인 실패: {ex.Message}");
+                }
+                finally
+                {
+                    SetScanState(false, null);
+                }
+            }
+
+            private AmmoMemoryScanResult ScanForValue(int targetValue, Action<string> progress)
+            {
+                if (!TryOpenHelldiversProcess(out IntPtr handle, out int processId, out string error))
+                    return new AmmoMemoryScanResult(0, new List<IntPtr>(), "게임 프로세스를 읽을 수 없습니다: " + error, "");
+
+                try
+                {
+                    var matches = new List<IntPtr>();
+                    const ulong startAddress = 0x10000;
+                    const ulong maxAddress = 0x00007FFFFFFEFFFF;
+                    ulong address = startAddress;
+                    ulong scannedBytes = 0;
+                    DateTime lastProgress = DateTime.UtcNow;
+                    int mbiSize = Marshal.SizeOf<MemoryBasicInformation>();
+
+                    while (address < maxAddress && matches.Count < MaxCandidateCount)
+                    {
+                        UIntPtr query = VirtualQueryEx(handle, new IntPtr(unchecked((long)address)), out MemoryBasicInformation mbi, (UIntPtr)mbiSize);
+                        if (query == UIntPtr.Zero)
+                        {
+                            address += 0x1000;
+                            continue;
+                        }
+
+                        ulong regionBase = unchecked((ulong)mbi.BaseAddress.ToInt64());
+                        ulong regionSize = mbi.RegionSize.ToUInt64();
+                        if (regionSize == 0)
+                        {
+                            address += 0x1000;
+                            continue;
+                        }
+
+                        ulong nextAddress = regionBase + regionSize;
+                        if (nextAddress <= address)
+                            break;
+
+                        if (IsReadablePrivateRegion(mbi))
+                        {
+                            ScanMemoryRegion(handle, regionBase, regionSize, targetValue, matches, ref scannedBytes);
+                            if (DateTime.UtcNow - lastProgress > TimeSpan.FromMilliseconds(250))
+                            {
+                                progress($"읽기 전용 탐색 중... {scannedBytes / (1024 * 1024)} MB, 후보 {matches.Count}개");
+                                lastProgress = DateTime.UtcNow;
+                            }
+                        }
+
+                        address = nextAddress;
+                    }
+
+                    string note = matches.Count >= MaxCandidateCount
+                        ? $"후보가 {MaxCandidateCount}개에 도달해 탐색을 중단했습니다. 더 특이한 탄약 수로 다시 시작하세요."
+                        : $"읽기 전용 탐색 완료: {scannedBytes / (1024 * 1024)} MB에서 후보 {matches.Count}개를 찾았습니다.";
+                    return new AmmoMemoryScanResult(processId, matches, note, "");
+                }
+                finally
+                {
+                    CloseHandle(handle);
+                }
+            }
+
+            private static AmmoMemoryScanResult FilterForValue(int processId, IReadOnlyCollection<IntPtr> previous, int targetValue)
+            {
+                if (!TryOpenHelldiversProcess(processId, out IntPtr handle, out string error))
+                    return new AmmoMemoryScanResult(processId, new List<IntPtr>(), "게임 프로세스를 읽을 수 없습니다: " + error, "");
+
+                try
+                {
+                    var matches = new List<IntPtr>();
+                    foreach (IntPtr address in previous)
+                    {
+                        if (TryReadInt32(handle, address, out int value) && value == targetValue)
+                            matches.Add(address);
+                    }
+
+                    return new AmmoMemoryScanResult(processId, matches, $"필터 완료: 후보 {previous.Count}개 중 {matches.Count}개가 값 {targetValue}와 일치합니다.", "");
+                }
+                finally
+                {
+                    CloseHandle(handle);
+                }
+            }
+
+            private static AmmoMemoryScanResult ReadCandidateValues(int processId, IReadOnlyCollection<IntPtr> candidates)
+            {
+                if (!TryOpenHelldiversProcess(processId, out IntPtr handle, out string error))
+                    return new AmmoMemoryScanResult(processId, new List<IntPtr>(), "게임 프로세스를 읽을 수 없습니다: " + error, "");
+
+                try
+                {
+                    var lines = new List<string>();
+                    int shown = 0;
+                    foreach (IntPtr address in candidates)
+                    {
+                        if (TryReadInt32(handle, address, out int value))
+                            lines.Add($"0x{address.ToInt64():X16} = {value}");
+                        else
+                            lines.Add($"0x{address.ToInt64():X16} = 읽기 실패");
+
+                        if (++shown >= 100)
+                            break;
+                    }
+
+                    if (candidates.Count > shown)
+                        lines.Add($"... 나머지 {candidates.Count - shown}개 생략");
+
+                    return new AmmoMemoryScanResult(processId, candidates.ToList(), $"후보 {candidates.Count}개의 현재 값을 확인했습니다.", string.Join(Environment.NewLine, lines));
+                }
+                finally
+                {
+                    CloseHandle(handle);
+                }
+            }
+
+            private static bool TryOpenHelldiversProcess(out IntPtr handle, out int processId, out string error)
+            {
+                Process? process = Process.GetProcessesByName("helldivers2")
+                    .OrderByDescending(candidate =>
+                    {
+                        try { return candidate.StartTime; }
+                        catch { return DateTime.MinValue; }
+                    })
+                    .FirstOrDefault();
+
+                if (process == null)
+                {
+                    handle = IntPtr.Zero;
+                    processId = 0;
+                    error = "Helldivers2.exe가 실행 중이 아닙니다.";
+                    return false;
+                }
+
+                processId = process.Id;
+                handle = OpenProcess(ProcessQueryInformation | ProcessVmRead, false, processId);
+                if (handle == IntPtr.Zero)
+                {
+                    error = new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()).Message;
+                    return false;
+                }
+
+                error = "";
+                return true;
+            }
+
+            private static bool TryOpenHelldiversProcess(int expectedProcessId, out IntPtr handle, out string error)
+            {
+                handle = IntPtr.Zero;
+                error = "";
+                if (expectedProcessId <= 0)
+                {
+                    error = "먼저 새 후보 찾기를 실행하세요.";
+                    return false;
+                }
+
+                try
+                {
+                    using Process process = Process.GetProcessById(expectedProcessId);
+                    if (!process.ProcessName.Equals("helldivers2", StringComparison.OrdinalIgnoreCase))
+                    {
+                        error = "이전 탐색 대상 게임 프로세스가 바뀌었습니다. 새 후보 찾기부터 다시 실행하세요.";
+                        return false;
+                    }
+                }
+                catch
+                {
+                    error = "이전 탐색 대상 게임 프로세스가 종료되었습니다.";
+                    return false;
+                }
+
+                handle = OpenProcess(ProcessQueryInformation | ProcessVmRead, false, expectedProcessId);
+                if (handle == IntPtr.Zero)
+                {
+                    error = new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()).Message;
+                    return false;
+                }
+
+                return true;
+            }
+
+            private static bool IsReadablePrivateRegion(MemoryBasicInformation region)
+            {
+                uint protection = region.Protect;
+                return region.State == MemCommit
+                    && region.Type == MemPrivate
+                    && (protection & PageGuard) == 0
+                    && (protection & PageNoAccess) == 0
+                    && (protection & 0xFF) != 0;
+            }
+
+            private static void ScanMemoryRegion(IntPtr handle, ulong regionBase, ulong regionSize, int targetValue, List<IntPtr> matches, ref ulong scannedBytes)
+            {
+                byte[] target = BitConverter.GetBytes(targetValue);
+                byte[] buffer = new byte[ScanChunkSize];
+                ulong regionEnd = regionBase + regionSize;
+                for (ulong offset = 0; regionBase + offset < regionEnd && matches.Count < MaxCandidateCount; offset += ScanChunkSize)
+                {
+                    int requested = (int)Math.Min((ulong)buffer.Length, regionEnd - (regionBase + offset));
+                    IntPtr address = new IntPtr(unchecked((long)(regionBase + offset)));
+                    if (!ReadProcessMemory(handle, address, buffer, new IntPtr(requested), out IntPtr read) || read.ToInt64() < sizeof(int))
+                        continue;
+
+                    int readable = (int)Math.Min(read.ToInt64(), requested);
+                    scannedBytes += (ulong)readable;
+                    for (int index = 0; index <= readable - sizeof(int) && matches.Count < MaxCandidateCount; index += sizeof(int))
+                    {
+                        if (buffer[index] == target[0]
+                            && buffer[index + 1] == target[1]
+                            && buffer[index + 2] == target[2]
+                            && buffer[index + 3] == target[3])
+                        {
+                            matches.Add(new IntPtr(unchecked((long)(regionBase + offset + (ulong)index))));
+                        }
+                    }
+                }
+            }
+
+            private static bool TryReadInt32(IntPtr handle, IntPtr address, out int value)
+            {
+                byte[] bytes = new byte[sizeof(int)];
+                if (ReadProcessMemory(handle, address, bytes, new IntPtr(bytes.Length), out IntPtr read) && read.ToInt64() == bytes.Length)
+                {
+                    value = BitConverter.ToInt32(bytes, 0);
+                    return true;
+                }
+
+                value = 0;
+                return false;
+            }
+
+            private static string FormatAddresses(IReadOnlyCollection<IntPtr> addresses, string title)
+            {
+                var lines = new List<string> { $"{title}: {addresses.Count}개" };
+                foreach (IntPtr address in addresses.Take(100))
+                    lines.Add($"0x{address.ToInt64():X16}");
+                if (addresses.Count > 100)
+                    lines.Add($"... 나머지 {addresses.Count - 100}개 생략");
+                return string.Join(Environment.NewLine, lines);
+            }
+
+            private void SetScanState(bool scanning, string? status)
+            {
+                isScanning = scanning;
+                scanButton.Enabled = !scanning;
+                filterButton.Enabled = !scanning && candidateAddresses.Count > 0;
+                inspectButton.Enabled = !scanning && candidateAddresses.Count > 0;
+                if (!string.IsNullOrWhiteSpace(status))
+                    SetStatus(status);
+            }
+
+            private void SetStatus(string status)
+            {
+                if (IsDisposed)
+                    return;
+                if (InvokeRequired)
+                {
+                    BeginInvoke(new Action<string>(SetStatus), status);
+                    return;
+                }
+
+                statusLabel.Text = status;
+                statusLabel.ForeColor = status.Contains("실패", StringComparison.Ordinal) || status.Contains("없습니다", StringComparison.Ordinal)
+                    ? Color.LightCoral
+                    : Color.Gainsboro;
+            }
+
+            private static void AppendDiagnosticLog(string message)
+            {
+                try
+                {
+                    Directory.CreateDirectory(AppDataPath);
+                    string path = Path.Combine(AppDataPath, "ammo-memory-diagnostics.log");
+                    File.AppendAllText(path, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {message}{Environment.NewLine}", Encoding.UTF8);
+                }
+                catch
+                {
+                    // 진단 로그를 쓰지 못해도 읽기 전용 탐색 자체는 계속 진행한다.
+                }
+            }
+
+            private readonly record struct AmmoMemoryScanResult(int ProcessId, List<IntPtr> Addresses, string Note, string Details);
         }
 
         public class AutoReloadSettings

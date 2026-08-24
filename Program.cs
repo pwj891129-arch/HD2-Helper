@@ -2618,8 +2618,15 @@ namespace HD2_Helper
 
         private async Task TryTriggerAutoReloadAfterInputSettlesAsync()
         {
-            // 발사키 해제 또는 무기 전환 뒤 HUD가 안정적으로 장전 안내를 표시할 수 있도록 0.2초 후 재확인한다.
+            // 발사키를 놓은 뒤에는 짧은 0.2초 대기만 둬 장전 안내가 갱신되는 순간을 확인한다.
             await Task.Delay(200);
+            await TryTriggerAutoReloadFromPrimaryAttackAsync();
+        }
+
+        private async Task TryTriggerAutoReloadAfterWeaponSwitchAsync()
+        {
+            // 1/2/3 무기 전환은 장착 애니메이션과 HUD 갱신이 길 수 있어 1초 뒤에만 장전 안내를 확인한다.
+            await Task.Delay(1000);
             await TryTriggerAutoReloadFromPrimaryAttackAsync();
         }
 
@@ -3614,8 +3621,8 @@ namespace HD2_Helper
 
                 if (IsUnmodifiedWeaponSwitchKey(vkCode))
                 {
-                    // 주무기·보조무기·지원무기 전환 직후에도 중앙 장전 안내가 뜰 수 있어 같은 지연 검사로 보조한다.
-                    _ = Task.Run(TryTriggerAutoReloadAfterInputSettlesAsync);
+                    // 숫자열 1/2/3 무기 전환은 HUD가 안정된 뒤에만 중앙 장전 안내를 검사한다.
+                    _ = Task.Run(TryTriggerAutoReloadAfterWeaponSwitchAsync);
                 }
             }
 

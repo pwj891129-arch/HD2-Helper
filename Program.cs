@@ -283,6 +283,8 @@ namespace HD2_Helper
         private bool _editorHangulMode = true;
         private bool _editorForwardedCtrlDown;
         private bool _editorForwardedShiftDown;
+        // 비활성 F3 편집창이 떠 있어도 실제 입력칸을 편집 중일 때만 게임 키를 WebView로 전달한다.
+        private bool _editorTextInputFocused;
 
         private bool _isRightMouseButtonDown;
         private bool _isLeftMouseButtonDown;
@@ -1208,6 +1210,11 @@ namespace HD2_Helper
             HandleWebJsonMessage(e.WebMessageAsJson, _webView);
         }
 
+        private bool IsHelperEditorWebView(WebView2? webView)
+        {
+            return _helperEditorWindow is { IsDisposed: false } editor && editor.OwnsWebView(webView);
+        }
+
         private void HandleWebJsonMessage(string json, WebView2? sourceWebView = null)
         {
             try
@@ -1216,7 +1223,16 @@ namespace HD2_Helper
                 if (!doc.RootElement.TryGetProperty("type", out var typeElement)) return;
 
                 string? type = typeElement.GetString();
-                if (type == "LOAD_DISABLED_ITEMS")
+                if (type == "EDITOR_TEXT_INPUT_FOCUS")
+                {
+                    // 메인 창의 HTML도 같은 메시지를 보낼 수 있으므로, F3 편집 WebView의 신호만 수용한다.
+                    if (IsHelperEditorWebView(sourceWebView)
+                        && doc.RootElement.TryGetProperty("focused", out var focusedElement))
+                    {
+                        _editorTextInputFocused = focusedElement.GetBoolean();
+                    }
+                }
+                else if (type == "LOAD_DISABLED_ITEMS")
                 {
                     SendDisabledItemsToWeb(sourceWebView);
                 }
@@ -3766,7 +3782,9 @@ namespace HD2_Helper
             if (!IsGameActive() || _isPad || _isWaitingForKey)
                 return false;
 
-            if (_helperEditorWindow is not { IsDisposed: false, Visible: true } editor || !editor.CanReceiveForwardedKeyboardInput)
+            if (_helperEditorWindow is not { IsDisposed: false, Visible: true } editor
+                || !editor.CanReceiveForwardedKeyboardInput
+                || !_editorTextInputFocused)
             {
                 ResetEditorForwardedText();
                 return false;
@@ -7375,6 +7393,8 @@ namespace HD2_Helper
             }
 
             public bool CanReceiveForwardedKeyboardInput => Visible && !IsDisposed && webView.CoreWebView2 != null;
+
+            public bool OwnsWebView(WebView2? candidate) => ReferenceEquals(webView, candidate);
 
             public void InsertTextFromHook(int backspaceCount, string text)
             {

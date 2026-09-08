@@ -20,6 +20,7 @@
 		{ "Name": "이글 110mm 로켓 포드", "Sequence": ["up", "right", "up", "left"] },
 		{ "Name": "이글 공중타격", "Sequence": ["up", "right", "down", "right"] },
 		{ "Name": "이글 집속탄", "Sequence": ["up", "right", "down", "down", "right"] },
+		{ "Name": "이글 가스 공중타격", "Sequence": ["up", "right", "left", "right"] },
 		{ "Name": "이글 네이팜 공중타격", "Sequence": ["up", "right", "down", "up"] },
 		{ "Name": "이글 연막 타격", "Sequence": ["up", "right", "up", "down"] }
     ],

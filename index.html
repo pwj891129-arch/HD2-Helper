@@ -2165,6 +2165,21 @@
             }
         }
 
+        // F3 편집창은 게임 포커스를 유지하므로, 입력칸을 실제로 편집 중일 때만 전역 키 훅이 문자를 전달한다.
+        function reportEditorTextInputFocus() {
+            const element = document.activeElement;
+            const tag = (element?.tagName || '').toLowerCase();
+            const inputType = (element?.type || 'text').toLowerCase();
+            const editable = !!element && (element.isContentEditable
+                || tag === 'textarea'
+                || (tag === 'input' && ['text', 'search', 'password', 'email', 'url', 'tel', 'number'].includes(inputType)));
+            postAppMessage({ type: 'EDITOR_TEXT_INPUT_FOCUS', focused: editable });
+        }
+
+        document.addEventListener('focusin', reportEditorTextInputFocus, true);
+        document.addEventListener('focusout', () => setTimeout(reportEditorTextInputFocus, 0), true);
+        window.addEventListener('blur', () => postAppMessage({ type: 'EDITOR_TEXT_INPUT_FOCUS', focused: false }));
+
         function notifyImageCacheReady() {
             imageCacheReady = true;
             applyPendingSelectedPreset();

@@ -3791,7 +3791,7 @@ namespace HD2_Helper
 
         private bool TryRouteEditorKeyboardInput(uint vkCode, bool isDown)
         {
-            if (!IsGameActive() || _isPad || _isWaitingForKey)
+            if (!IsGameActive() || _isWaitingForKey)
                 return false;
 
             if (_helperEditorWindow is not { IsDisposed: false, Visible: true } editor
@@ -10918,6 +10918,8 @@ namespace HD2_Helper
                     connectedPads.Remove(instanceId);
                     if (activeController == IntPtr.Zero && connectedPads.Count > 0)
                         activeController = connectedPads.Values.First();
+                    // 마지막 게임패드가 빠진 뒤에도 키보드 기능이 컨트롤러 모드로 남지 않게 실제 연결 상태를 반영한다.
+                    _isPad = connectedPads.Count > 0;
                 }
             }
 
@@ -11301,7 +11303,8 @@ namespace HD2_Helper
                     if (TryRouteEditorKeyboardInput?.Invoke(vkCode, isDown) == true)
                         return (IntPtr)1;
 
-                    if (IsGameActive() && !_isPad)
+                    // 게임패드가 연결되어 있어도 키보드 훅은 독립적으로 동작해야 한글 채팅과 조합키를 함께 쓸 수 있다.
+                    if (IsGameActive())
                     {
                         if (isDown)
                         {

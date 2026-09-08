@@ -224,6 +224,8 @@ namespace HD2_Helper
         private static readonly Dictionary<string, uint> _manualStratagemKey = new(StringComparer.OrdinalIgnoreCase);
 
         private static int _inputDelay = 30;
+        // 장비 자동선택의 메뉴 안정화 지연과 분리해, 스트라타젬 방향 커맨드만 빠르게 입력한다.
+        private const int StratagemDirectionKeyDelayMs = 10;
         private static uint _autoSelectKey = (uint)Keys.F1;
         private static uint _overlayKey = (uint)Keys.MButton;
         private static uint _reinforceKey = (uint)Keys.XButton1;
@@ -6910,14 +6912,15 @@ namespace HD2_Helper
                         break;
                 }
 
-                Thread.Sleep(_inputDelay);
+                // 호출키 입력 뒤와 각 방향키 down/up 사이는 10ms로 유지해 커맨드만 빠르게 전송한다.
+                Thread.Sleep(StratagemDirectionKeyDelayMs);
 
                 foreach (var vk in keySequence)
                 {
                     SendInput(vk, true);
-                    Thread.Sleep(_inputDelay);
+                    Thread.Sleep(StratagemDirectionKeyDelayMs);
                     SendInput(vk, false);
-                    Thread.Sleep(_inputDelay);
+                    Thread.Sleep(StratagemDirectionKeyDelayMs);
                 }
             }
             finally

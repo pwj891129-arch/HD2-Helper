@@ -1230,6 +1230,8 @@ namespace HD2_Helper
                         && doc.RootElement.TryGetProperty("focused", out var focusedElement))
                     {
                         _editorTextInputFocused = focusedElement.GetBoolean();
+                        if (!_editorTextInputFocused)
+                            ClearEditorInputRouting();
                     }
                 }
                 else if (type == "LOAD_DISABLED_ITEMS")
@@ -3629,6 +3631,16 @@ namespace HD2_Helper
             {
                 // 클릭으로 F3/F4의 WebView가 앞으로 나오는 경우에만 소프트웨어 포인터를 다시 최상단으로 올린다.
                 RestoreSoftwareCursorAfterOverlayMouseInput();
+
+                if (e.IsDown
+                    && _editorTextInputFocused
+                    && _helperEditorWindow is { IsDisposed: false, Visible: true } editor
+                    && !editor.Bounds.Contains(Cursor.Position))
+                {
+                    // F3 창은 비활성 오버레이라 게임을 클릭해도 WebView focusout이 오지 않을 수 있다.
+                    // 창 밖 클릭은 다음 게임 키를 가로채지 않도록 편집 입력 상태를 즉시 종료한다.
+                    ClearEditorInputRouting();
+                }
             }
 
             if (e.IsDown && !e.IsInjected)
@@ -3786,7 +3798,7 @@ namespace HD2_Helper
                 || !editor.CanReceiveForwardedKeyboardInput
                 || !_editorTextInputFocused)
             {
-                ResetEditorForwardedText();
+                ClearEditorInputRouting();
                 return false;
             }
 
@@ -3934,6 +3946,15 @@ namespace HD2_Helper
         {
             _editorHangulEngine.Clear();
             _editorLastInjected = "";
+        }
+
+        private void ClearEditorInputRouting()
+        {
+            // F3 창을 닫거나 게임 화면으로 돌아오면 WebView가 키를 받을 이유가 없으므로 수정키와 한글 조합도 함께 비운다.
+            _editorTextInputFocused = false;
+            _editorForwardedCtrlDown = false;
+            _editorForwardedShiftDown = false;
+            ResetEditorForwardedText();
         }
 
         private static bool IsPhysicalKeyDown(Keys key)
@@ -4122,6 +4143,7 @@ namespace HD2_Helper
             if (_helperEditorWindowRequestedVisible || _helperEditorWindow is { IsDisposed: false, Visible: true })
             {
                 _helperEditorWindowRequestedVisible = false;
+                ClearEditorInputRouting();
                 _helperEditorWindow?.Hide();
                 return;
             }
@@ -4178,6 +4200,7 @@ namespace HD2_Helper
             if (_helperEditorWindow is { IsDisposed: false, Visible: true })
             {
                 // F4 프리셋 전환창을 열 때는 F3 편집창을 먼저 닫아 입력 대상과 메뉴전환 상태가 꼬이지 않게 한다.
+                ClearEditorInputRouting();
                 _helperEditorWindow.Hide();
             }
         }
@@ -4190,6 +4213,7 @@ namespace HD2_Helper
                 // 조준점처럼 포커스가 풀리면 모든 보조창을 숨기고 주입한 보기 키도 반드시 해제한다.
                 ReleaseOverlayStratagemViewKey("게임 포커스 상실");
                 _overlayForm?.Hide();
+                ClearEditorInputRouting();
                 _helperEditorWindow?.Hide();
                 _presetOverlayForm?.Hide();
                 return;
@@ -4209,6 +4233,7 @@ namespace HD2_Helper
         {
             // 포커스 이탈로 숨긴 경우와 사용자가 닫은 경우를 구분해, 닫기 직후 자동 복원되지 않게 한다.
             _helperEditorWindowRequestedVisible = false;
+            ClearEditorInputRouting();
         }
         private List<PresetSummary> LoadPresetSummaries()
         {

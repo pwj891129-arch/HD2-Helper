@@ -2110,7 +2110,7 @@
         let suppressPresetClickTimer = 0;
         let currentWaitingKeyTarget = null;
         let currentInputDelay = 30;
-        let currentStratagemCommandInputDelay = 10;
+        let currentStratagemCommandInputDelay = 15;
         const baseStratagemSlotCount = 10;
         const maxAdditionalStratagemSlots = 20;
         const stratagemSlotsPerRow = 5;
@@ -2353,7 +2353,7 @@
         }
 
         function updateStratagemCommandInputDelaySetting(value) {
-            const delay = Math.max(5, Math.min(100, Number(value) || 10));
+            const delay = Math.max(5, Math.min(100, Number(value) || 15));
             currentStratagemCommandInputDelay = delay;
             updateStratagemCommandInputDelayLabel(delay);
             postAppMessage({ type: 'SET_STRATAGEM_COMMAND_INPUT_DELAY', value: delay });
@@ -2888,7 +2888,7 @@
 
             currentInputDelay = data.inputDelay ?? 30;
             updateInputDelayLabel(currentInputDelay);
-            currentStratagemCommandInputDelay = data.stratagemCommandInputDelay ?? 10;
+            currentStratagemCommandInputDelay = data.stratagemCommandInputDelay ?? 15;
             updateStratagemCommandInputDelayLabel(currentStratagemCommandInputDelay);
             additionalStratagemSlots = Math.max(0, Math.min(maxAdditionalStratagemSlots, Math.trunc(Number(data.additionalStratagemSlots) || 0)));
             const additionalSlotsControl = document.getElementById('setting-additional-stratagem-slots');
@@ -2997,7 +2997,7 @@
             }
         }
 
-        renderSettings({ inputDelay: 30, stratagemCommandInputDelay: 10, waitingTarget: null, keys: { slots: [] } });
+        renderSettings({ inputDelay: 30, stratagemCommandInputDelay: 15, waitingTarget: null, keys: { slots: [] } });
 
         document.addEventListener('mousedown', (e) => {
             if (!currentWaitingKeyTarget || e.button !== 0) return;

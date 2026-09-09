@@ -226,7 +226,7 @@ namespace HD2_Helper
         // 장비 자동선택 메뉴 이동과 스트라타젬 호출키 입력에 사용하는 지연이다.
         private static int _inputDelay = 30;
         // 스트라타젬 방향키 커맨드 사이에만 적용하는 별도 지연이다.
-        private static int _stratagemCommandInputDelay = 10;
+        private static int _stratagemCommandInputDelay = 15;
         private static uint _autoSelectKey = (uint)Keys.F1;
         private static uint _overlayKey = (uint)Keys.MButton;
         private static uint _reinforceKey = (uint)Keys.XButton1;

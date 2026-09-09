@@ -1692,8 +1692,12 @@
                 </div>
                 <div class="settings-list">
                     <div class="setting-row" onclick="cycleInputDelaySetting()" oncontextmenu="adjustInputDelaySetting(event, -5)">
-                        <span class="setting-label">입력 딜레이</span>
+                        <span class="setting-label">메뉴 입력 딜레이</span>
                         <button class="setting-value-btn" id="setting-input-delay" type="button" tabindex="-1"></button>
+                    </div>
+                    <div class="setting-row" onclick="cycleStratagemCommandInputDelaySetting()" oncontextmenu="adjustStratagemCommandInputDelaySetting(event, -5)">
+                        <span class="setting-label">커맨드 입력 딜레이</span>
+                        <button class="setting-value-btn" id="setting-stratagem-command-input-delay" type="button" tabindex="-1"></button>
                     </div>
 
                     <label class="crosshair-row">
@@ -2106,6 +2110,7 @@
         let suppressPresetClickTimer = 0;
         let currentWaitingKeyTarget = null;
         let currentInputDelay = 30;
+        let currentStratagemCommandInputDelay = 10;
         const baseStratagemSlotCount = 10;
         const maxAdditionalStratagemSlots = 20;
         const stratagemSlotsPerRow = 5;
@@ -2344,6 +2349,28 @@
 
         function updateInputDelayLabel(value) {
             const delayButton = document.getElementById('setting-input-delay');
+            if (delayButton) delayButton.textContent = `${value}ms`;
+        }
+
+        function updateStratagemCommandInputDelaySetting(value) {
+            const delay = Math.max(5, Math.min(100, Number(value) || 10));
+            currentStratagemCommandInputDelay = delay;
+            updateStratagemCommandInputDelayLabel(delay);
+            postAppMessage({ type: 'SET_STRATAGEM_COMMAND_INPUT_DELAY', value: delay });
+        }
+
+        function adjustStratagemCommandInputDelaySetting(e, delta) {
+            e?.preventDefault();
+            e?.stopPropagation();
+            updateStratagemCommandInputDelaySetting(currentStratagemCommandInputDelay + delta);
+        }
+
+        function cycleStratagemCommandInputDelaySetting() {
+            adjustStratagemCommandInputDelaySetting(null, 5);
+        }
+
+        function updateStratagemCommandInputDelayLabel(value) {
+            const delayButton = document.getElementById('setting-stratagem-command-input-delay');
             if (delayButton) delayButton.textContent = `${value}ms`;
         }
 
@@ -2861,6 +2888,8 @@
 
             currentInputDelay = data.inputDelay ?? 30;
             updateInputDelayLabel(currentInputDelay);
+            currentStratagemCommandInputDelay = data.stratagemCommandInputDelay ?? 10;
+            updateStratagemCommandInputDelayLabel(currentStratagemCommandInputDelay);
             additionalStratagemSlots = Math.max(0, Math.min(maxAdditionalStratagemSlots, Math.trunc(Number(data.additionalStratagemSlots) || 0)));
             const additionalSlotsControl = document.getElementById('setting-additional-stratagem-slots');
             if (additionalSlotsControl) additionalSlotsControl.value = String(additionalStratagemSlots);
@@ -2968,7 +2997,7 @@
             }
         }
 
-        renderSettings({ inputDelay: 30, waitingTarget: null, keys: { slots: [] } });
+        renderSettings({ inputDelay: 30, stratagemCommandInputDelay: 10, waitingTarget: null, keys: { slots: [] } });
 
         document.addEventListener('mousedown', (e) => {
             if (!currentWaitingKeyTarget || e.button !== 0) return;

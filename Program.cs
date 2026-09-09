@@ -223,9 +223,10 @@ namespace HD2_Helper
         // 값이 없는 방향은 게임 input_settings.config에서 읽은 _stratagemKey 값을 그대로 사용한다.
         private static readonly Dictionary<string, uint> _manualStratagemKey = new(StringComparer.OrdinalIgnoreCase);
 
+        // 장비 자동선택 메뉴 이동과 스트라타젬 호출키 입력에 사용하는 지연이다.
         private static int _inputDelay = 30;
-        // 장비 자동선택의 메뉴 안정화 지연과 분리해, 스트라타젬 방향 커맨드만 빠르게 입력한다.
-        private const int StratagemDirectionKeyDelayMs = 10;
+        // 스트라타젬 방향키 커맨드 사이에만 적용하는 별도 지연이다.
+        private static int _stratagemCommandInputDelay = 10;
         private static uint _autoSelectKey = (uint)Keys.F1;
         private static uint _overlayKey = (uint)Keys.MButton;
         private static uint _reinforceKey = (uint)Keys.XButton1;
@@ -1266,6 +1267,15 @@ namespace HD2_Helper
                         SendSettingsToWeb();
                     }
                 }
+                else if (type == "SET_STRATAGEM_COMMAND_INPUT_DELAY")
+                {
+                    if (doc.RootElement.TryGetProperty("value", out var valueElement) && valueElement.TryGetInt32(out int value))
+                    {
+                        _stratagemCommandInputDelay = Math.Clamp(value, 5, 100);
+                        SaveSetting();
+                        SendSettingsToWeb();
+                    }
+                }
                 else if (type == "SET_ADDITIONAL_STRATAGEM_SLOTS")
                 {
                     if (doc.RootElement.TryGetProperty("value", out var valueElement) && valueElement.TryGetInt32(out int value))
@@ -1980,6 +1990,10 @@ namespace HD2_Helper
                 {
                     if (int.TryParse(value, out int delay)) _inputDelay = Math.Clamp(delay, 30, 100);
                 }
+                else if (key.Equals("stratagemCommandInputDelay", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (int.TryParse(value, out int delay)) _stratagemCommandInputDelay = Math.Clamp(delay, 5, 100);
+                }
                 else if (key.Equals("additionalStratagemSlots", StringComparison.OrdinalIgnoreCase))
                 {
                     if (int.TryParse(value, out int slotCount))
@@ -2157,6 +2171,7 @@ namespace HD2_Helper
             var lines = new List<string>
             {
                 $"inputDelay={Math.Clamp(_inputDelay, 30, 100)}",
+                $"stratagemCommandInputDelay={Math.Clamp(_stratagemCommandInputDelay, 5, 100)}",
                 $"additionalStratagemSlots={_additionalStratagemSlots}",
                 $"stratagemCompactLayout={(_stratagemCompactLayout ? 1 : 0)}",
                 $"useLegacyEquipmentLayout={(_useLegacyEquipmentLayout ? 1 : 0)}",
@@ -2411,6 +2426,7 @@ namespace HD2_Helper
             {
                 type = "SETTINGS_LOADED",
                 inputDelay = Math.Clamp(_inputDelay, 30, 100),
+                stratagemCommandInputDelay = Math.Clamp(_stratagemCommandInputDelay, 5, 100),
                 additionalStratagemSlots = _additionalStratagemSlots,
                 stratagemCompactLayout = _stratagemCompactLayout,
                 useLegacyEquipmentLayout = _useLegacyEquipmentLayout,
@@ -6912,15 +6928,16 @@ namespace HD2_Helper
                         break;
                 }
 
-                // 호출키 입력 뒤와 각 방향키 down/up 사이는 10ms로 유지해 커맨드만 빠르게 전송한다.
-                Thread.Sleep(StratagemDirectionKeyDelayMs);
+                // 호출키 입력 뒤와 각 방향키 down/up 사이는 별도 커맨드 딜레이로 유지한다.
+                int commandDelayMs = Math.Clamp(_stratagemCommandInputDelay, 5, 100);
+                Thread.Sleep(commandDelayMs);
 
                 foreach (var vk in keySequence)
                 {
                     SendInput(vk, true);
-                    Thread.Sleep(StratagemDirectionKeyDelayMs);
+                    Thread.Sleep(commandDelayMs);
                     SendInput(vk, false);
-                    Thread.Sleep(StratagemDirectionKeyDelayMs);
+                    Thread.Sleep(commandDelayMs);
                 }
             }
             finally

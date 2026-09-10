@@ -529,6 +529,10 @@
             overflow-y: auto;
         }
 
+        [data-test-setting][hidden] {
+            display: none !important;
+        }
+
         #slot-key-settings {
             display: contents;
         }
@@ -1720,7 +1724,7 @@
                         <span class="setting-label">자동 재장전 안내 보정</span>
                         <button class="setting-value-btn" type="button" tabindex="-1">열기</button>
                     </div>
-                    <div class="setting-row" onclick="openAmmoMemoryScanner()">
+                    <div class="setting-row" data-test-setting hidden onclick="openAmmoMemoryScanner()">
                         <span class="setting-label">탄약 메모리 찾기 (테스트)</span>
                         <button class="setting-value-btn" type="button" tabindex="-1">열기</button>
                     </div>
@@ -1881,28 +1885,28 @@
                         <span class="setting-label">경고음 미리듣기</span>
                         <button class="setting-value-btn" type="button" tabindex="-1">재생</button>
                     </div>
-                    <div class="settings-subtitle">테스트</div>
-                    <label class="crosshair-row">
+                    <div class="settings-subtitle" data-test-setting hidden>테스트</div>
+                    <label class="crosshair-row" data-test-setting hidden>
                         <span class="setting-label">테스트 모드</span>
                         <input id="setting-test-mode" type="checkbox" onchange="toggleTestMode(this.checked)">
                     </label>
-                    <label class="crosshair-row">
+                    <label class="crosshair-row" data-test-setting hidden>
                         <span class="setting-label">조준점 100ms 일시정지</span>
                         <input id="timer-test-crosshair" type="checkbox" onchange="toggleTimerTestOption('crosshair', this.checked)">
                     </label>
-                    <label class="crosshair-row">
+                    <label class="crosshair-row" data-test-setting hidden>
                         <span class="setting-label">지원무기 25ms 일시정지</span>
                         <input id="timer-test-supportWeapon" type="checkbox" onchange="toggleTimerTestOption('supportWeapon', this.checked)">
                     </label>
-                    <label class="crosshair-row">
+                    <label class="crosshair-row" data-test-setting hidden>
                         <span class="setting-label">소프트웨어 커서 8ms 일시정지</span>
                         <input id="timer-test-softwareCursor" type="checkbox" onchange="toggleTimerTestOption('softwareCursor', this.checked)">
                     </label>
-                    <label class="crosshair-row">
+                    <label class="crosshair-row" data-test-setting hidden>
                         <span class="setting-label">비활성 음소거 250ms 일시정지</span>
                         <input id="timer-test-audioMute" type="checkbox" onchange="toggleTimerTestOption('audioMute', this.checked)">
                     </label>
-                    <label class="crosshair-row">
+                    <label class="crosshair-row" data-test-setting hidden>
                         <span class="setting-label">게임패드 16ms 일시정지</span>
                         <input id="timer-test-gamepad" type="checkbox" onchange="toggleTimerTestOption('gamepad', this.checked)">
                     </label>
@@ -2135,6 +2139,7 @@
         let stratagemReselectEnabled = true;
         let armorSortMode = 'rating';
         let armorPassiveFilter = '';
+        let isTestBuild = false;
         let testModeEnabled = false;
         let muteGameAudioWhenInactive = false;
         let excludeOverlaysFromCapture = false;
@@ -2399,11 +2404,13 @@
         }
 
         function toggleTestMode(enabled) {
+            if (!isTestBuild) return;
             testModeEnabled = enabled === true;
             postAppMessage({ type: 'SET_TEST_MODE', enabled: testModeEnabled });
         }
 
         function toggleTimerTestOption(timer, paused) {
+            if (!isTestBuild) return;
             // 지속 실행되는 각 타이머를 독립적으로 정지해 주기적 스터터링 원인을 하나씩 분리한다.
             postAppMessage({ type: 'SET_TIMER_TEST_OPTION', timer, paused: paused === true });
         }
@@ -2439,6 +2446,7 @@
         }
 
         function openAmmoMemoryScanner() {
+            if (!isTestBuild) return;
             // 자동 재장전과 분리된 읽기 전용 진단창으로, 사용자가 입력한 탄약 수의 메모리 후보만 찾는다.
             postAppMessage({ type: 'OPEN_AMMO_MEMORY_SCANNER' });
         }
@@ -2876,6 +2884,10 @@
         applyManualStratagemKeysExpanded();
 
         function renderSettings(data) {
+            isTestBuild = data.isTestBuild === true;
+            document.querySelectorAll('[data-test-setting]').forEach(element => {
+                element.hidden = !isTestBuild;
+            });
             currentWaitingKeyTarget = data.waitingTarget || null;
             if (!initialSelectionStateReceived) {
                 // 시작 시점의 마지막 탭만 복원 대상으로 사용한다. 이후 설정 메시지는 선택을 되돌리지 않는다.
@@ -2898,7 +2910,7 @@
             useLegacyEquipmentLayout = data.useLegacyEquipmentLayout === true;
             stratagemReselectEnabled = data.stratagemReselectEnabled !== false;
             presetAutoSaveEnabled = data.presetAutoSaveEnabled === true;
-            testModeEnabled = data.testModeEnabled === true;
+            testModeEnabled = isTestBuild && data.testModeEnabled === true;
             muteGameAudioWhenInactive = data.muteGameAudioWhenInactive === true;
             excludeOverlaysFromCapture = data.excludeOverlaysFromCapture === true;
             const autoReloadEnabled = data.autoReloadEnabled === true;
@@ -2915,7 +2927,7 @@
             const timerPauses = data.timerPauses || {};
             ['crosshair', 'supportWeapon', 'softwareCursor', 'audioMute', 'gamepad'].forEach(timer => {
                 const control = document.getElementById(`timer-test-${timer}`);
-                if (control) control.checked = timerPauses[timer] === true;
+                if (control) control.checked = isTestBuild && timerPauses[timer] === true;
             });
             const inactiveMuteControl = document.getElementById('setting-inactive-game-audio-mute');
             if (inactiveMuteControl) inactiveMuteControl.checked = muteGameAudioWhenInactive;

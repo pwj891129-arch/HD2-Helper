@@ -2,6 +2,7 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Globalization;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text;
@@ -119,6 +120,10 @@ namespace HD2_Helper
 
     public class MainForm : Form
     {
+        // 실행 파일의 버전으로 판별해 정식 패키지에 남은 테스트 설정이 활성화되지 않게 한다.
+        private static readonly bool IsTestBuild = typeof(MainForm).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            .Split('+')[0].EndsWith("-test", StringComparison.OrdinalIgnoreCase) == true;
         private static readonly string AppDataPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "HD2 Helper");
         private static readonly string SettingsPath = Path.Combine(AppDataPath, "settings.ini");
         private static readonly string DisabledItemsPath = Path.Combine(AppDataPath, "disabled.ini");
@@ -1347,6 +1352,7 @@ namespace HD2_Helper
                 }
                 else if (type == "SET_TEST_MODE")
                 {
+                    if (!IsTestBuild) return;
                     if (doc.RootElement.TryGetProperty("enabled", out var enabledElement))
                     {
                         _testModeEnabled = enabledElement.GetBoolean();
@@ -1356,6 +1362,7 @@ namespace HD2_Helper
                 }
                 else if (type == "SET_TIMER_TEST_OPTION")
                 {
+                    if (!IsTestBuild) return;
                     string timer = doc.RootElement.TryGetProperty("timer", out var timerElement)
                         ? timerElement.GetString() ?? ""
                         : "";
@@ -1565,6 +1572,7 @@ namespace HD2_Helper
                 }
                 else if (type == "OPEN_AMMO_MEMORY_SCANNER")
                 {
+                    if (!IsTestBuild) return;
                     OpenAmmoMemoryScanner();
                 }
                 else if (type == "OPEN_PRESET_OVERLAY")
@@ -2031,32 +2039,32 @@ namespace HD2_Helper
                 else if (key.Equals("testModeEnabled", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!uint.TryParse(value, out uint vk)) continue;
-                    _testModeEnabled = vk != 0;
+                    _testModeEnabled = IsTestBuild && vk != 0;
                 }
                 else if (key.Equals("pauseCrosshairTimer", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!uint.TryParse(value, out uint vk)) continue;
-                    _pauseCrosshairTimer = vk != 0;
+                    _pauseCrosshairTimer = IsTestBuild && vk != 0;
                 }
                 else if (key.Equals("pauseSupportWeaponTimer", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!uint.TryParse(value, out uint vk)) continue;
-                    _pauseSupportWeaponTimer = vk != 0;
+                    _pauseSupportWeaponTimer = IsTestBuild && vk != 0;
                 }
                 else if (key.Equals("pauseSoftwareCursorTimer", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!uint.TryParse(value, out uint vk)) continue;
-                    _pauseSoftwareCursorTimer = vk != 0;
+                    _pauseSoftwareCursorTimer = IsTestBuild && vk != 0;
                 }
                 else if (key.Equals("pauseAudioMuteTimer", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!uint.TryParse(value, out uint vk)) continue;
-                    _pauseAudioMuteTimer = vk != 0;
+                    _pauseAudioMuteTimer = IsTestBuild && vk != 0;
                 }
                 else if (key.Equals("pauseGamepadLoop", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!uint.TryParse(value, out uint vk)) continue;
-                    _pauseGamepadLoop = vk != 0;
+                    _pauseGamepadLoop = IsTestBuild && vk != 0;
                 }
                 else if (key.Equals("muteGameAudioWhenInactive", StringComparison.OrdinalIgnoreCase))
                 {
@@ -2425,6 +2433,7 @@ namespace HD2_Helper
             var payload = new
             {
                 type = "SETTINGS_LOADED",
+                isTestBuild = IsTestBuild,
                 inputDelay = Math.Clamp(_inputDelay, 30, 100),
                 stratagemCommandInputDelay = Math.Clamp(_stratagemCommandInputDelay, 5, 100),
                 additionalStratagemSlots = _additionalStratagemSlots,

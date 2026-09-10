@@ -1724,10 +1724,6 @@
                         <span class="setting-label">자동 재장전 안내 보정</span>
                         <button class="setting-value-btn" type="button" tabindex="-1">열기</button>
                     </div>
-                    <div class="setting-row" data-test-setting hidden onclick="openAmmoMemoryScanner()">
-                        <span class="setting-label">탄약 메모리 찾기 (테스트)</span>
-                        <button class="setting-value-btn" type="button" tabindex="-1">열기</button>
-                    </div>
                     <div class="setting-row" data-setting-row="autoSelectKey" onclick="startKeyCapture('autoSelectKey')">
                         <span class="setting-label">자동선택 단축키</span>
                         <button class="setting-key-btn" type="button" data-setting-key="autoSelectKey" tabindex="-1"></button>
@@ -1890,6 +1886,10 @@
                         <span class="setting-label">테스트 모드</span>
                         <input id="setting-test-mode" type="checkbox" onchange="toggleTestMode(this.checked)">
                     </label>
+                    <div class="setting-row" data-test-setting hidden onclick="openAmmoMemoryScanner()">
+                        <span class="setting-label">탄약 메모리 찾기 (테스트)</span>
+                        <button class="setting-value-btn" type="button" tabindex="-1">열기</button>
+                    </div>
                     <label class="crosshair-row" data-test-setting hidden>
                         <span class="setting-label">조준점 100ms 일시정지</span>
                         <input id="timer-test-crosshair" type="checkbox" onchange="toggleTimerTestOption('crosshair', this.checked)">

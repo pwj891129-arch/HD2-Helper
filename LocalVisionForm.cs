@@ -61,7 +61,7 @@ internal sealed class LocalVisionForm : Form
         AddButton(samples, "샘플 삭제", DeleteSamplesAsync);
         layout.Controls.Add(samples, 0, 2);
         layout.Controls.Add(_status, 0, 3);
-        _tips.SetToolTip(_results, "코사인 유사도이며 정확도 확률이 아닙니다.");
+        _tips.SetToolTip(_results, "스트라타젬은 세부 아이콘 일치도, 장비는 모델 특징 유사도입니다. 정확도 확률이 아닙니다.");
         _tips.SetToolTip(_samplesOnly, "기본 장비 이미지를 제외하고 직접 등록한 샘플만 비교합니다.");
         foreach (string type in _recognizer.Items.Select(i => i.Type).Distinct()) _type.Items.Add(type);
         _type.SelectedIndexChanged += (_, _) => {

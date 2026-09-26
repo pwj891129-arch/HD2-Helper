@@ -20,6 +20,7 @@ internal sealed class LocalVisionRecognizer : IDisposable
     private readonly string _modelPath;
     private readonly Dictionary<string, float[]> _features = new(StringComparer.OrdinalIgnoreCase);
     private InferenceSession? _session;
+    private readonly StratagemIconMatcher _icons = new();
     public IReadOnlyList<VisionItem> Items { get; }
 
     public LocalVisionRecognizer(string root, string appData)
@@ -104,7 +105,9 @@ internal sealed class LocalVisionRecognizer : IDisposable
     {
         token.ThrowIfCancellationRequested();
         if (!HasVisualContent(image)) return new(Array.Empty<VisionCandidate>(), true, 0);
-        float[] query = Embed(image);
+        bool iconMode = type == "스트라타젬";
+        float[][]? iconQuery = iconMode ? StratagemIconMatcher.Extract(image) : null;
+        float[] query = iconMode ? Array.Empty<float>() : Embed(image);
         var matches = new List<VisionCandidate>();
         int count = 0;
         foreach (var item in Items.Where(i => i.Type == type))
@@ -117,6 +120,12 @@ internal sealed class LocalVisionRecognizer : IDisposable
             foreach (var (path, source) in paths)
             {
                 token.ThrowIfCancellationRequested();
+                if (iconMode)
+                {
+                    matches.Add(new(item.Name, _icons.Compare(iconQuery!, path), source + " · 세부 아이콘"));
+                    count++;
+                    continue;
+                }
                 if (!_features.TryGetValue(path, out var vector))
                 {
                     using var reference = new Bitmap(path);
@@ -129,7 +138,10 @@ internal sealed class LocalVisionRecognizer : IDisposable
                 count++;
             }
         }
-        return Rank(matches, count);
+        var result = Rank(matches, count);
+        if (!iconMode) return result;
+        var ranked = result.Candidates;
+        return result with { Uncertain = ranked.Count < 2 || ranked[0].Similarity < .80f || ranked[0].Similarity - ranked[1].Similarity < .025f };
     }
 
     private static bool HasVisualContent(Bitmap image)
@@ -181,6 +193,7 @@ internal sealed class LocalVisionRecognizer : IDisposable
         {
             File.Delete(path);
             _features.Remove(path);
+            _icons.Remove(path);
             removed++;
         }
         return removed;

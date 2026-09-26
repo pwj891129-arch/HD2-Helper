@@ -62,6 +62,29 @@ internal static class Checks
             Assert(result.Candidates[0].Name == "M-102 포격 FRV", "legacy AI reference remains accessible under new name");
         }
         Application.EnableVisualStyles();
+        foreach (var (file, expected) in new[] {
+            ("codex-clipboard-446a2d3d-16cb-4edd-8005-f093450396f5.png", "방어막 생성 팩"),
+            ("codex-clipboard-e1b47a50-7573-46d2-8d95-1034d1ee6f00.png", "방향 방패") })
+        {
+            using var capture = new Bitmap(Path.Combine(root, "tests", "LocalVisionChecks", "Fixtures", file));
+            timer.Restart();
+            result = recognizer.Recognize(capture, "스트라타젬", false, CancellationToken.None);
+            Console.WriteLine(string.Join(", ", result.Candidates.Select(c => $"{c.Name}={c.Similarity:F3}")));
+            Assert(result.Candidates[0].Name == expected && !result.Uncertain, "actual HUD: " + expected);
+            Console.WriteLine($"HUD recognition: {timer.ElapsedMilliseconds} ms");
+        }
+        foreach (string name in new[] { "방향 방패", "방어막 생성 팩", "탄도 방패 배낭", "가드 독", "로버", "핫도그", "작살총", "M-102 포격 FRV", "벌목꾼", "바스티온 MK XVI", "이글 가스 공중타격" })
+        {
+            using var original = new Bitmap(recognizer.Items.Single(i => i.Type == "스트라타젬" && i.Name == name).ImagePath);
+            using var small = new Bitmap(72, 72);
+            using (var g = Graphics.FromImage(small))
+            {
+                g.Clear(Color.FromArgb(33, 33, 33));
+                g.DrawImage(original, new Rectangle(5, 7, 60, 60));
+            }
+            result = recognizer.Recognize(small, "스트라타젬", false, CancellationToken.None);
+            Assert(result.Candidates[0].Name == name, "reduced icon: " + name);
+        }
         using var form = new LocalVisionForm(root, temporary);
         var setImage = typeof(LocalVisionForm).GetMethod("SetImage", BindingFlags.Instance | BindingFlags.NonPublic)!;
         setImage.Invoke(form, new object[] { new Bitmap(sai) });
@@ -86,7 +109,7 @@ internal static class Checks
         form.DrawToBitmap(minimum, new Rectangle(Point.Empty, minimum.Size));
         minimum.Save(Path.Combine(temporary, "local-vision-minimum.png"));
         form.Close();
-        Console.WriteLine("PASS: local vision checks (synthetic references only; live game accuracy unverified)");
+        Console.WriteLine("PASS: local vision checks (includes two HUD captures; live game automation unverified)");
     }
 
     private static void Assert(bool condition, string label)

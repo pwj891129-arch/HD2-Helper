@@ -201,6 +201,7 @@ namespace HD2_Helper
         private static List<(string Type, string Category, string Name)> _parsedData = new();
         private static Dictionary<string, Image?> _imageCache = new();
         private static Dictionary<string, string[]> _sequenceMap = new();
+        private static readonly Dictionary<string, string> _stratagemExclusiveGroups = new(StringComparer.Ordinal);
 
         private static int _additionalStratagemSlots;
         private static int StratagemSlotCount => BaseStratagemSlotCount + _additionalStratagemSlots;
@@ -876,6 +877,9 @@ namespace HD2_Helper
                                 }
 
                                 _parsedData.Add((type.Key, subCategoryName, name));
+                                if (type.Key == "스트라타젬" && item.TryGetProperty("ExclusiveGroup", out var exclusiveGroup)
+                                    && !string.IsNullOrWhiteSpace(exclusiveGroup.GetString()))
+                                    _stratagemExclusiveGroups[name] = exclusiveGroup.GetString()!;
                             }
                         }
                     }
@@ -5797,6 +5801,7 @@ namespace HD2_Helper
             {
                 async Task PressMoveKey(Keys key, string reason)
                 {
+                    if (!IsGameActive()) throw new OperationCanceledException();
                     keyLog?.Add($"{key}:{reason}");
                     await TapKey(key);
                 }
@@ -5955,7 +5960,7 @@ namespace HD2_Helper
             else if (index == 4)
             {
                 var selectedItems = _currentSlots
-                     .Select((name, slotIndex) => new { Name = name, SlotIndex = slotIndex })
+                     .Select((name, slotIndex) => new StratagemSelectionTarget(name ?? "", slotIndex))
                      .Where(item => !string.IsNullOrWhiteSpace(item.Name))
                      .Where(item => itemMap.ContainsKey(item.Name!))
                      .Where(item =>
@@ -5991,6 +5996,55 @@ namespace HD2_Helper
                 bool isMenuOpen = true;
                 int prepSlotIndex = 0;
                 bool currentPositionInitialized = !stratagemReselectEnabled;
+                string?[]? observedSlots = null;
+
+                void AbortReselection(string reason)
+                {
+                    LogAutoSelectionDebug("abort=reselection-plan: " + reason);
+                    if (!IsDisposed)
+                        BeginInvoke(new Action(() => MessageBox.Show(this, reason, "스트라타젬 재선택 중단", MessageBoxButtons.OK, MessageBoxIcon.Warning)));
+                }
+
+                async Task<bool> OpenReselectionSlot(int slot)
+                {
+                    if (!IsGameActive()) throw new OperationCanceledException();
+                    while (prepSlotIndex < slot) { await TapKey(Keys.D); prepSlotIndex++; }
+                    while (prepSlotIndex > slot) { await TapKey(Keys.A); prepSlotIndex--; }
+                    await TapKey(Keys.Space);
+                    isMenuOpen = true;
+                    return await WaitForStratagemSelectionMenuReady();
+                }
+
+                async Task<(bool Known, string? Name)> ReadReselectionSlot(int slot)
+                {
+                    string? previous = null;
+                    bool hasPrevious = false;
+                    for (int attempt = 0; attempt < 3; attempt++)
+                    {
+                        ThrowIfAutoSelectionCanceled();
+                        if (!IsGameActive()) throw new OperationCanceledException();
+                        bool occupied = IsSelectedEquippedStratagemSlotOccupied(out bool located, out int actualSlot);
+                        string? name = null;
+                        bool known = located && actualSlot == slot;
+                        if (known && occupied)
+                        {
+                            name = await MatchStratagemNameWithIconFallback($"plan.slot-{slot + 1}");
+                            known = name != null && itemMap.ContainsKey(name);
+                        }
+                        if (known && hasPrevious && string.Equals(previous, name, StringComparison.Ordinal))
+                            return (true, name);
+                        previous = name;
+                        hasPrevious = known;
+                        await Task.Delay(75);
+                    }
+                    return (false, null);
+                }
+
+                if (stratagemReselectEnabled)
+                {
+                    try { StratagemReselectionPlanner.ValidateTargets(selectedItems, _stratagemExclusiveGroups); }
+                    catch (InvalidOperationException ex) { AbortReselection(ex.Message); return; }
+                }
                 if (!stratagemReselectEnabled)
                 {
                     // 재선택 OFF의 좌표 모드는 게임 선택창 최초 커서가 공격 탭의 첫 번째 사용 가능 항목이라고 보고 시작한다.
@@ -6020,8 +6074,35 @@ namespace HD2_Helper
 
                 CaptureAutoSelectionDebug("stratagem-menu-ready");
 
+                if (stratagemReselectEnabled)
+                {
+                    observedSlots = new string?[4];
+                    for (int slot = 0; slot < 4; slot++)
+                    {
+                        if (slot > 0 && !await OpenReselectionSlot(slot)) return;
+                        var observed = await ReadReselectionSlot(slot);
+                        if (!observed.Known)
+                        {
+                            AbortReselection($"{slot + 1}번 장착 칸을 확실하게 인식하지 못했습니다. 장비는 교체하지 않았습니다.");
+                            return;
+                        }
+                        observedSlots[slot] = observed.Name;
+                        await TapKey(Keys.Escape);
+                        isMenuOpen = false;
+                        prepSlotIndex = slot;
+                    }
+                    try
+                    {
+                        var plan = StratagemReselectionPlanner.Build(observedSlots, selectedItems, _stratagemExclusiveGroups);
+                        selectedItems = plan.Replacements.Select(r => new StratagemSelectionTarget(r.Name, r.SlotIndex)).ToList();
+                        LogAutoSelectionDebug($"reselectionPlan={string.Join(" | ", plan.Replacements.Select(r => $"slot={r.SlotIndex + 1}: {r.PreviousName ?? "(empty)"}->{r.Name}"))}");
+                    }
+                    catch (InvalidOperationException ex) { AbortReselection(ex.Message); return; }
+                }
+
                 for (int i = 0; i < selectedItems.Count; i++)
                 {
+                    if (!IsGameActive()) throw new OperationCanceledException();
                     var selected = selectedItems[i];
                     var target = itemMap[selected.Name!];
                     var targetData = _parsedData.FirstOrDefault(d => d.Name == selected.Name);
@@ -6051,20 +6132,24 @@ namespace HD2_Helper
                         }
                     }
 
-                    if (stratagemReselectEnabled && IsSelectedEquippedStratagemSlotOccupied())
+                    string? confirmedEquippedName = null;
+                    if (stratagemReselectEnabled)
+                    {
+                        var observed = await ReadReselectionSlot(selected.SlotIndex);
+                        if (!observed.Known || !string.Equals(observed.Name, observedSlots![selected.SlotIndex], StringComparison.Ordinal))
+                        {
+                            AbortReselection("장착 상태가 계획과 다르거나 인식이 불확실합니다. 추가 교체를 중단했습니다.");
+                            return;
+                        }
+                        confirmedEquippedName = observed.Name;
+                        slotWasEquipped = observed.Name != null;
+                    }
+
+                    if (stratagemReselectEnabled && slotWasEquipped)
                     {
                         slotWasEquipped = true;
                         LogAutoSelectionDebug($"equippedSlot.detected slot={selected.SlotIndex + 1}");
-                        string? equippedName = null;
-                        for (int retry = 0; retry < 3; retry++)
-                        {
-                            equippedName = await MatchStratagemNameWithIconFallback($"equippedSlot.slot-{selected.SlotIndex + 1}");
-                            if (equippedName != null)
-                                break;
-
-                            if (retry < 2)
-                                await Task.Delay(25);
-                        }
+                        string? equippedName = confirmedEquippedName;
 
                         if (equippedName == null)
                         {
@@ -6110,7 +6195,7 @@ namespace HD2_Helper
                         string? currentName = await MatchStratagemNameWithIconFallback("startPosition");
                         if (currentName != null && itemMap.TryGetValue(currentName, out var current))
                         {
-                            // 아이콘 매칭은 쓰지 않지만, 선택창이 기억한 카테고리/칸을 보정하려고 이름 OCR만 시작 좌표에 반영한다.
+                            // 선택창이 기억한 카테고리/칸을 현재 판독 결과로 보정한다.
                             curG = current.Group;
                             curR = current.Row;
                             curC = current.Col;
@@ -6119,8 +6204,8 @@ namespace HD2_Helper
                         }
                         else
                         {
-                            currentPositionInitialized = true;
-                            LogAutoSelectionDebug($"startPosition.fallback=G{curG}/R{curR}/C{curC}, ocr={(currentName ?? "(null)")}");
+                            AbortReselection("선택창의 현재 위치를 인식하지 못했습니다. 좌표를 추측하지 않고 중단했습니다.");
+                            return;
                         }
                     }
 
@@ -6152,10 +6237,8 @@ namespace HD2_Helper
 
                         if (arrivalName == null)
                         {
-                            // 도착 위치까지 계산 이동을 마쳤는데 OCR만 실패한 경우에는 낮은 신뢰도의 아이콘 결과로 보정하지 않고 현재 목표 좌표를 선택한다.
-                            // 이번 궤도 가스 타격처럼 상세 패널은 맞지만 OCR이 빈값이 되는 상황에서 불필요한 한 칸 보정을 막기 위한 처리다.
-                            LogAutoSelectionDebug($"arrival-ocr-null-assume-target slot={selected.SlotIndex + 1}, expected={selected.Name}, targetPos=G{target.Group}/R{target.Row}/C{target.Col}");
-                            CaptureAutoSelectionDebug($"arrival-ocr-null-assume-target-slot-{selected.SlotIndex + 1}", important: true);
+                            AbortReselection("목표 스트라타젬 도착 여부를 확인하지 못했습니다. 선택하지 않고 중단했습니다.");
+                            return;
                         }
 
                         if (!arrivalMatchesTarget && arrivalName != null && itemMap.TryGetValue(arrivalName, out var arrivalPosition))
@@ -6174,7 +6257,7 @@ namespace HD2_Helper
                             LogAutoSelectionDebug($"arrivalCorrection.result slot={selected.SlotIndex + 1}, expected={selected.Name}, ocr={(arrivalName ?? "(null)")}, match={arrivalMatchesTarget}");
                         }
 
-                        if (!arrivalMatchesTarget && arrivalName != null)
+                        if (!arrivalMatchesTarget)
                         {
                             // 목표가 아닌 항목임을 OCR로 확인한 경우에는 오선택을 막기 위해 해당 슬롯 자동선택을 중단한다.
                             LogAutoSelectionDebug($"abort=arrival-mismatch, slot={selected.SlotIndex + 1}, expected={selected.Name}, arrival={arrivalName}");
@@ -6191,6 +6274,7 @@ namespace HD2_Helper
                     }
 
                     keyLog.Add("Space:select-after-arrival-check");
+                    if (!IsGameActive()) throw new OperationCanceledException();
                     await TapKey(Keys.Space, holdMs: Math.Max(_inputDelay, 120), afterMs: GetMenuMotionSettleDelay());
                     LogAutoSelectionDebug($"selectKey=Space, expected={selected.Name}, selectedByArrival={(arrivalName ?? "(unknown)")}, holdMs={Math.Max(_inputDelay, 120)}, afterMs={GetMenuMotionSettleDelay()}");
 
@@ -6200,16 +6284,43 @@ namespace HD2_Helper
 
                     await Task.Delay(20);
                     CaptureAutoSelectionDebug($"after-select-slot-{selected.SlotIndex + 1}");
-                    bool shouldVerifyMenuState = i == selectedItems.Count - 1;
-                    // 이미 들어 있던 스트라타젬을 교체하면 게임이 준비화면으로 복귀하므로 다음 슬롯은 준비화면에서 다시 열어야 한다.
-                    isMenuOpen = !stratagemReselectEnabled ? true : slotWasEquipped ? false : shouldVerifyMenuState ? await IsStratagemSelectionMenuOpen() : true;
-                    LogAutoSelectionDebug($"selectionResult slot={selected.SlotIndex + 1}, expected={selected.Name}, arrival={(arrivalName ?? "(null)")}, arrivalMatch={arrivalMatchesTarget}, accepted={!isMenuOpen}, currentPos=G{curG}/R{curR}/C{curC}");
-                    if (!isMenuOpen)
+                    if (stratagemReselectEnabled)
                     {
-                        // 선택 후 준비화면으로 돌아온 경우 다음 루프에서 준비화면 기준으로 슬롯을 다시 연다.
+                        bool? menuState = null;
+                        for (int attempt = 0; attempt < 3 && menuState == null; attempt++)
+                        {
+                            await Task.Delay(150);
+                            menuState = await ReadStratagemSelectionMenuState();
+                        }
+                        if (menuState == null) { AbortReselection("선택 후 화면 상태를 확인하지 못했습니다. 추가 입력을 중단했습니다."); return; }
                         prepSlotIndex = selected.SlotIndex;
-                        currentPositionInitialized = !stratagemReselectEnabled;
+                        if (menuState == true)
+                        {
+                            // 빈 칸 선택 후 게임이 다음 칸을 열 수 있으므로 실제 포커스를 읽고 닫는다.
+                            IsSelectedEquippedStratagemSlotOccupied(out bool located, out int focusedSlot);
+                            if (!located) { AbortReselection("선택 후 슬롯 포커스를 확인하지 못했습니다."); return; }
+                            prepSlotIndex = focusedSlot;
+                            await TapKey(Keys.Escape);
+                        }
+                        isMenuOpen = false;
+                        if (!await OpenReselectionSlot(selected.SlotIndex)) return;
+                        var verified = await ReadReselectionSlot(selected.SlotIndex);
+                        if (!verified.Known || verified.Name != selected.Name)
+                        {
+                            AbortReselection("장착이 확인되지 않았습니다. 동시 장착 제한 또는 인식 상태를 확인해 주세요.");
+                            return;
+                        }
+                        observedSlots![selected.SlotIndex] = verified.Name;
+                        await TapKey(Keys.Escape);
+                        isMenuOpen = false;
+                        prepSlotIndex = selected.SlotIndex;
+                        currentPositionInitialized = false;
+                        LogAutoSelectionDebug($"verifiedReplacement slot={selected.SlotIndex + 1}, name={verified.Name}");
+                        continue;
                     }
+                    // 좌표 전용 모드는 기존처럼 선택창에서 다음 빈 칸을 계속 채운다.
+                    isMenuOpen = true;
+                    LogAutoSelectionDebug($"selectionResult slot={selected.SlotIndex + 1}, expected={selected.Name}, arrival={(arrivalName ?? "(null)")}, arrivalMatch={arrivalMatchesTarget}, accepted={!isMenuOpen}, currentPos=G{curG}/R{curR}/C{curC}");
                 }
             }
         }
@@ -6379,8 +6490,10 @@ namespace HD2_Helper
             return c.R > 175 && c.G > 145 && c.B < 95 && c.R - c.B > 100;
         }
 
-        private bool IsSelectedEquippedStratagemSlotOccupied()
+        private bool IsSelectedEquippedStratagemSlotOccupied(out bool located, out int selectedIndex)
         {
+            located = false;
+            selectedIndex = -1;
             if (!TryBuildEquippedStratagemSlotSearchRegion(out Rectangle searchRegion))
                 return false;
 
@@ -6428,6 +6541,10 @@ namespace HD2_Helper
 
             int occupiedThreshold = Math.Max(65, inner.Width * inner.Height / 45);
             bool occupied = contentPixels >= occupiedThreshold;
+            int centerX = selectedSlot.Value.Left + selectedSlot.Value.Width / 2;
+            selectedIndex = Math.Clamp(centerX * 4 / cap.Width, 0, 3);
+            // The search region covers the four equally spaced prep slots. Borderline content is unknown, not empty.
+            located = occupied || contentPixels <= occupiedThreshold / 2;
             SaveEquippedSlotDetectionDebug(cap, searchRegion, selectedSlot, inner, contentPixels, occupiedThreshold, occupied, contentCategories, contentColors);
 
 
@@ -6856,7 +6973,9 @@ namespace HD2_Helper
             return Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1);
         }
 
-        private async Task<bool> IsStratagemSelectionMenuOpen()
+        private async Task<bool> IsStratagemSelectionMenuOpen() => await ReadStratagemSelectionMenuState() == true;
+
+        private async Task<bool?> ReadStratagemSelectionMenuState()
         {
             // 전체 화면 OCR은 팀원 카드의 "준비/장비" 같은 글자에 흔들릴 수 있으므로,
             // 먼저 실제 상세 패널 이름줄에서 스트라타젬명이 읽히는지 확인한다.
@@ -6865,7 +6984,7 @@ namespace HD2_Helper
                 return true;
 
             if (!TryGetGameClientRegion(out Rectangle region))
-                return false;
+                return null;
 
             using var cap = new Bitmap(region.Width, region.Height, PixelFormat.Format32bppArgb);
             using (Graphics g = Graphics.FromImage(cap))
@@ -6888,7 +7007,7 @@ namespace HD2_Helper
             if (cleanText.Contains("준비") || cleanText.Contains("장비"))
                 return false;
 
-            return false;
+            return null;
         }
 
         private void TriggerStratagem(int slotIndex)

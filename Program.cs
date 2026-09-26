@@ -163,6 +163,7 @@ namespace HD2_Helper
         private OcrRegionSettingsForm? _ocrRegionSettingsForm;
         private AutoReloadCalibrationForm? _autoReloadCalibrationForm;
         private AmmoMemoryScannerForm? _ammoMemoryScannerForm;
+        private LocalVisionForm? _localVisionForm;
         private System.Windows.Forms.Timer? _crosshairTimer;
         private System.Windows.Forms.Timer? _supportWeaponGaugeTimer;
         private System.Windows.Forms.Timer? _autoReloadDetectionTimer;
@@ -1569,6 +1570,17 @@ namespace HD2_Helper
                 else if (type == "OPEN_AUTO_RELOAD_CALIBRATION")
                 {
                     OpenAutoReloadCalibration();
+                }
+                else if (type == "OPEN_LOCAL_VISION")
+                {
+                    if (!IsTestBuild) return;
+                    if (_localVisionForm == null || _localVisionForm.IsDisposed)
+                    {
+                        _localVisionForm = new LocalVisionForm(AppDomain.CurrentDomain.BaseDirectory, AppDataPath);
+                        _localVisionForm.FormClosed += (_, _) => _localVisionForm = null;
+                    }
+                    _localVisionForm.Show();
+                    _localVisionForm.Activate();
                 }
                 else if (type == "OPEN_AMMO_MEMORY_SCANNER")
                 {

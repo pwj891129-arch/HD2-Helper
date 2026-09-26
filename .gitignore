@@ -37,3 +37,6 @@ release-info.json
 # OS files
 Thumbs.db
 Desktop.ini
+
+# Reproducible model binary is shipped in release packages, not Git history.
+/models/*.onnx

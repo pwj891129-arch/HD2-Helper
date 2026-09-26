@@ -21,23 +21,26 @@
 		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
 		<!-- GitHub 릴리스와 업데이터가 동일한 버전을 판별하도록 배포 버전을 함께 갱신한다. -->
 		<!-- 테스트 빌드는 정식판의 네 번째 자리만 올리고, 다음 정식판에서만 세 번째 자리를 올린다. -->
-		<Version>2.0.35.6-test</Version>
+		<Version>2.0.35.7-test</Version>
 		<GenerateAssemblyInfo>true</GenerateAssemblyInfo>
 	</PropertyGroup>
 
 	<ItemGroup>
 		<!-- 별도 실행 파일인 Updater 프로젝트의 소스와 obj 생성물을 헬퍼 빌드에서 제외한다. -->
 		<Compile Remove="Updater\**\*.cs" />
+		<Compile Remove="tests\**\*.cs" />
 	</ItemGroup>
 	<ItemGroup>
 		<EmbeddedResource Include="index.html" />
 		<!-- 자동선택 좌표는 실행 폴더의 database.json을 읽으므로 publish/빌드 결과에도 최신 DB를 함께 복사한다. -->
 		<Content Include="database.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
 		<Content Include="icon.ico" />
+		<Content Include="models\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
 	</ItemGroup>
 
 	<ItemGroup>
 		<PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3967.48" />
+		<PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.22.1" />
 		<PackageReference Include="ppy.SDL2-CS" Version="1.0.82" ExcludeAssets="ContentFiles" />
 	</ItemGroup>
 </Project>

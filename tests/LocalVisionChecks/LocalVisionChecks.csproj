@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\LocalVisionRecognizer.cs" Link="LocalVisionRecognizer.cs" />
+    <Compile Include="..\..\LocalVisionForm.cs" Link="LocalVisionForm.cs" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.22.1" />
+  </ItemGroup>
+</Project>

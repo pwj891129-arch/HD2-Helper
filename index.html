@@ -1886,6 +1886,10 @@
                         <span class="setting-label">테스트 모드</span>
                         <input id="setting-test-mode" type="checkbox" onchange="toggleTestMode(this.checked)">
                     </label>
+                    <div class="setting-row" data-test-setting hidden onclick="openLocalVision()">
+                        <span class="setting-label">로컬 AI 장비 인식 (테스트)</span>
+                        <button class="setting-value-btn" type="button" tabindex="-1">열기</button>
+                    </div>
                     <div class="setting-row" data-test-setting hidden onclick="openAmmoMemoryScanner()">
                         <span class="setting-label">탄약 메모리 찾기 (테스트)</span>
                         <button class="setting-value-btn" type="button" tabindex="-1">열기</button>
@@ -2443,6 +2447,11 @@
             window.autoReloadCooldownMs = Math.round(normalizedSeconds * 1000);
             if (input) input.value = normalizedSeconds.toFixed(1);
             postAppMessage({ type: 'SET_AUTO_RELOAD_COOLDOWN', value: window.autoReloadCooldownMs });
+        }
+
+        function openLocalVision() {
+            if (!isTestBuild) return;
+            postAppMessage({ type: 'OPEN_LOCAL_VISION' });
         }
 
         function openAmmoMemoryScanner() {

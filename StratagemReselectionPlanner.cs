@@ -1,11 +1,27 @@
 namespace HD2_Helper;
 
 internal sealed record StratagemSelectionTarget(string Name, int SlotIndex);
-internal sealed record StratagemReplacement(string Name, int SlotIndex, string? PreviousName);
-internal sealed record StratagemReselectionPlan(IReadOnlyList<StratagemReplacement> Replacements, string?[] FinalSlots);
+internal enum StratagemPlanMode { InitialSelection, Mixed, Reselection, AlreadySatisfied }
+internal enum StratagemSelectionAction { Keep, FillEmpty, Replace }
+internal sealed record StratagemReplacement(string Name, int SlotIndex, string? PreviousName)
+{
+    public StratagemSelectionAction Action => PreviousName == null ? StratagemSelectionAction.FillEmpty : StratagemSelectionAction.Replace;
+}
+internal sealed record StratagemSelectionDecision(string Name, int SlotIndex, StratagemSelectionAction Action);
+internal sealed record StratagemReselectionPlan(IReadOnlyList<StratagemReplacement> Replacements, string?[] FinalSlots,
+    StratagemPlanMode Mode, IReadOnlyList<StratagemSelectionDecision> Decisions);
 
 internal static class StratagemReselectionPlanner
 {
+    public static StratagemReselectionPlan Build(IReadOnlyList<StratagemSlotObservation> observations,
+        IReadOnlyList<StratagemSelectionTarget> targets, IReadOnlyDictionary<string, string> groups)
+    {
+        if (observations.Count != 4 || observations.Select(o => o.SlotIndex).Order().SequenceEqual(new[] { 0, 1, 2, 3 }) == false
+            || observations.Any(o => !o.Known || (o.State == StratagemSlotState.Equipped ? string.IsNullOrWhiteSpace(o.Name) : o.Name != null)))
+            throw new InvalidOperationException("빈칸 또는 장착 상태가 확실하지 않은 칸이 있습니다. 선택을 중단합니다.");
+        return Build(observations.OrderBy(o => o.SlotIndex).Select(o => o.Name).ToArray(), targets, groups);
+    }
+
     public static void ValidateTargets(IReadOnlyList<StratagemSelectionTarget> targets, IReadOnlyDictionary<string, string> groups)
     {
         if (targets.Count > 4 || targets.Any(t => string.IsNullOrWhiteSpace(t.Name)))
@@ -49,9 +65,8 @@ internal static class StratagemReselectionPlanner
         }
         foreach (var target in targets.Where(t => !assigned.ContainsKey(t.Name)))
         {
-            int slot = target.SlotIndex >= 0 && target.SlotIndex < 4 && !reserved.Contains(target.SlotIndex)
-                ? target.SlotIndex
-                : Enumerable.Range(0, 4).Where(i => !reserved.Contains(i)).OrderBy(i => current[i] != null).ThenBy(i => i).First();
+            int slot = Enumerable.Range(0, 4).Where(i => !reserved.Contains(i))
+                .OrderBy(i => current[i] != null).ThenBy(i => i != target.SlotIndex).ThenBy(i => i).First();
             reserved.Add(slot);
             assigned.Add(target.Name, slot);
         }
@@ -63,6 +78,12 @@ internal static class StratagemReselectionPlanner
             final[slot] = target.Name;
             if (current[slot] != target.Name) operations.Add(new(target.Name, slot, current[slot]));
         }
-        return new(operations.OrderBy(o => o.SlotIndex).ToList(), final);
+        var mode = operations.Count == 0 ? StratagemPlanMode.AlreadySatisfied
+            : occupied.Length == 0 ? StratagemPlanMode.InitialSelection
+            : occupied.Length == 4 ? StratagemPlanMode.Reselection : StratagemPlanMode.Mixed;
+        var decisions = targets.Select(t => new StratagemSelectionDecision(t.Name, assigned[t.Name],
+            current[assigned[t.Name]] == t.Name ? StratagemSelectionAction.Keep
+            : current[assigned[t.Name]] == null ? StratagemSelectionAction.FillEmpty : StratagemSelectionAction.Replace)).ToArray();
+        return new(operations.OrderBy(o => o.PreviousName != null).ThenBy(o => o.SlotIndex).ToList(), final, mode, decisions);
     }
 }

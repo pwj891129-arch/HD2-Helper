@@ -69,3 +69,38 @@ Assert(vehicles["해방자 엑소슈트"] == vehicles["애국자 엑소슈트"],
 Assert(vehicles["M-102 포격 FRV"] == vehicles["보급 고속 정찰 차량"], "Recon metadata");
 Assert(vehicles.Values.Distinct().Count() == 3, "Vehicle kinds must remain separate");
 Console.WriteLine("PASS: database separates tank, exosuit, and recon groups");
+
+StratagemSlotObservation[] Observe(params string?[] names) => names.Select((n, i) =>
+    StratagemSlotObservation.FromEvidence(i, true, n, n == null ? 0 : 100)).ToArray();
+var fresh = StratagemReselectionPlanner.Build(Observe(null, null, null, null), Targets("A", "B", "C", "D"), groups);
+Assert(fresh.Mode == StratagemPlanMode.InitialSelection && fresh.Replacements.Count == 4
+    && fresh.Decisions.All(d => d.Action == StratagemSelectionAction.FillEmpty), "All empty: initial selection");
+var mixed = StratagemReselectionPlanner.Build(Observe("C", null, "A", null), Targets("A", "B"), groups);
+Assert(mixed.Mode == StratagemPlanMode.Mixed && mixed.Replacements.Count == 1
+    && mixed.Replacements[0].SlotIndex == 1 && mixed.FinalSlots[0] == "C", "Mixed: keep target elsewhere, fill empty instead of replacing");
+var conflict = StratagemReselectionPlanner.Build(Observe("Recon1", null, "A", null), Targets("Recon2", "B", "A"), groups);
+Assert(conflict.Replacements[0].Action == StratagemSelectionAction.FillEmpty
+    && conflict.Replacements[1].SlotIndex == 0 && conflict.Replacements[1].Action == StratagemSelectionAction.Replace,
+    "Fill empty first; replace same-kind vehicle in its original slot");
+Validate(new string?[] { "Recon1", null, "A", null }, Targets("Recon2", "B", "A"), conflict);
+var full = StratagemReselectionPlanner.Build(Observe("A", "B", "C", "D"), Targets("A", "B", "C", "E"), groups);
+Assert(full.Mode == StratagemPlanMode.Reselection && full.Replacements.Count == 1, "Full: only necessary replacement");
+var satisfied = StratagemReselectionPlanner.Build(Observe("B", "A", null, null), Targets("A", "B"), groups);
+Assert(satisfied.Mode == StratagemPlanMode.AlreadySatisfied && satisfied.Replacements.Count == 0
+    && satisfied.Decisions.All(d => d.Action == StratagemSelectionAction.Keep), "Already satisfied: no selection");
+var uncertain = Observe(null, null, null, null);
+uncertain[1] = StratagemSlotObservation.FromEvidence(1, true, null, 1);
+Assert(!uncertain[1].Known, "Unrecognized visible content is not empty");
+Reject(() => StratagemReselectionPlanner.Build(uncertain, Targets("A"), groups));
+Assert(!StratagemSlotObservation.FromEvidence(0, false, null, 0).Known, "Missing border is not empty");
+Reject(() => StratagemReselectionPlanner.Build(new[] { uncertain[0], uncertain[0], uncertain[2], uncertain[3] }, Targets("A"), groups));
+var consensus = new StratagemSlotConsensus();
+var empty = Observe(null, null, null, null)[0];
+Assert(!consensus.Observe(empty, 0, 0) && !consensus.Observe(empty, 0, 40) && consensus.Observe(empty, 0, 80), "Empty needs three stable observations");
+var equipped = Observe("A", null, null, null)[0];
+Assert(!consensus.Observe(equipped, 0, 120) && consensus.Observe(equipped, 0, 160), "Equipped needs two observations after transition");
+Assert(!consensus.Observe(equipped, 1, 200) && !consensus.Observe(equipped, 0, 240), "Wrong slot resets consensus");
+Assert(!consensus.Observe(equipped, 0, 600), "Stale observations reset consensus");
+Assert(!consensus.Observe(new(0, StratagemSlotState.Unknown, null), 0, 640)
+    && !consensus.Observe(equipped, 0, 680), "Unknown resets consensus");
+Console.WriteLine("PASS: initial/mixed/reselection/already-satisfied decisions, empty priority, unknown refusal and temporal state consensus");

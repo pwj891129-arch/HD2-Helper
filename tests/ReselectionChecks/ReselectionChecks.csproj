@@ -9,5 +9,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\..\StratagemReselectionPlanner.cs" Link="StratagemReselectionPlanner.cs" />
+    <Compile Include="..\..\StratagemSlotObservation.cs" Link="StratagemSlotObservation.cs" />
   </ItemGroup>
 </Project>

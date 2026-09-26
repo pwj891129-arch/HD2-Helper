@@ -6027,30 +6027,22 @@ namespace HD2_Helper
                     return await WaitForStratagemSelectionMenuReady();
                 }
 
-                async Task<(bool Known, string? Name)> ReadReselectionSlot(int slot)
+                async Task<StratagemSlotObservation> ReadReselectionSlot(int slot)
                 {
-                    string? previous = null;
-                    bool hasPrevious = false;
-                    long previousTime = 0;
-                    for (int attempt = 0; attempt < 3; attempt++)
+                    var consensus = new StratagemSlotConsensus();
+                    for (int attempt = 0; attempt < 4; attempt++)
                     {
                         ThrowIfAutoSelectionCanceled();
                         if (!IsGameActive()) throw new OperationCanceledException();
-                        bool occupied = IsSelectedEquippedStratagemSlotOccupied(out bool located, out int actualSlot, out string? name);
-                        bool known = located && actualSlot == slot;
-                        if (known && occupied)
+                        var observation = ReadSelectedEquippedStratagemSlot();
+                        if (consensus.Observe(observation, slot, Environment.TickCount64))
                         {
-                            known = name != null && itemMap.ContainsKey(name);
+                            LogAutoSelectionDebug($"slotObservation slot={slot + 1}, state={observation.State}, name={observation.Name ?? "(empty)"}");
+                            return observation;
                         }
-                        long now = Environment.TickCount64;
-                        if (known && hasPrevious && now - previousTime <= 250 && string.Equals(previous, name, StringComparison.Ordinal))
-                            return (true, name);
-                        previous = name;
-                        previousTime = now;
-                        hasPrevious = known;
-                        if (attempt < 2) await Task.Delay(35);
+                        if (attempt < 3) await Task.Delay(40);
                     }
-                    return (false, null);
+                    return new(slot, StratagemSlotState.Unknown, null);
                 }
 
                 if (stratagemReselectEnabled)
@@ -6090,6 +6082,7 @@ namespace HD2_Helper
                 if (stratagemReselectEnabled)
                 {
                     observedSlots = new string?[4];
+                    var observations = new List<StratagemSlotObservation>();
                     for (int slot = 0; slot < 4; slot++)
                     {
                         if (slot > 0 && !await OpenReselectionSlot(slot)) return;
@@ -6100,14 +6093,16 @@ namespace HD2_Helper
                             return;
                         }
                         observedSlots[slot] = observed.Name;
+                        observations.Add(observed);
                         await TapKey(Keys.Escape);
                         isMenuOpen = false;
                         prepSlotIndex = slot;
                     }
                     try
                     {
-                        var plan = StratagemReselectionPlanner.Build(observedSlots, selectedItems, _stratagemExclusiveGroups);
+                        var plan = StratagemReselectionPlanner.Build(observations, selectedItems, _stratagemExclusiveGroups);
                         selectedItems = plan.Replacements.Select(r => new StratagemSelectionTarget(r.Name, r.SlotIndex)).ToList();
+                        LogAutoSelectionDebug($"selectionMode={plan.Mode}, decisions={string.Join(" | ", plan.Decisions.Select(d => $"slot={d.SlotIndex + 1}:{d.Action}:{d.Name}"))}");
                         LogAutoSelectionDebug($"reselectionPlan={string.Join(" | ", plan.Replacements.Select(r => $"slot={r.SlotIndex + 1}: {r.PreviousName ?? "(empty)"}->{r.Name}"))}");
                     }
                     catch (InvalidOperationException ex) { AbortReselection(ex.Message); return; }
@@ -6155,7 +6150,8 @@ namespace HD2_Helper
                             return;
                         }
                         confirmedEquippedName = observed.Name;
-                        slotWasEquipped = observed.Name != null;
+                        slotWasEquipped = observed.State == StratagemSlotState.Equipped;
+                        LogAutoSelectionDebug($"nextAction slot={selected.SlotIndex + 1}, action={(slotWasEquipped ? "Replace" : "FillEmpty")}, target={selected.Name}");
                     }
 
                     if (stratagemReselectEnabled && slotWasEquipped)
@@ -6319,9 +6315,9 @@ namespace HD2_Helper
                         if (menuState == true)
                         {
                             // 빈 칸 선택 후 게임이 다음 칸을 열 수 있으므로 실제 포커스를 읽고 닫는다.
-                            IsSelectedEquippedStratagemSlotOccupied(out bool located, out int focusedSlot, out _);
-                            if (!located) { AbortReselection("선택 후 슬롯 포커스를 확인하지 못했습니다."); return; }
-                            prepSlotIndex = focusedSlot;
+                            var focusedSlot = ReadSelectedEquippedStratagemSlot();
+                            if (!focusedSlot.Known) { AbortReselection("선택 후 슬롯 포커스를 확인하지 못했습니다."); return; }
+                            prepSlotIndex = focusedSlot.SlotIndex;
                             await TapKey(Keys.Escape);
                         }
                         isMenuOpen = false;
@@ -6512,13 +6508,11 @@ namespace HD2_Helper
             return c.R > 175 && c.G > 145 && c.B < 95 && c.R - c.B > 100;
         }
 
-        private bool IsSelectedEquippedStratagemSlotOccupied(out bool located, out int selectedIndex, out string? equippedName)
+        private StratagemSlotObservation ReadSelectedEquippedStratagemSlot()
         {
-            equippedName = null;
-            located = false;
-            selectedIndex = -1;
+            var unknown = new StratagemSlotObservation(-1, StratagemSlotState.Unknown, null);
             if (!TryBuildEquippedStratagemSlotSearchRegion(out Rectangle searchRegion))
-                return false;
+                return unknown;
 
             using Bitmap cap = new(searchRegion.Width, searchRegion.Height, PixelFormat.Format32bppArgb);
             using (Graphics g = Graphics.FromImage(cap))
@@ -6530,7 +6524,7 @@ namespace HD2_Helper
             if (!selectedSlot.HasValue)
             {
                 SaveEquippedSlotDetectionDebug(cap, searchRegion, null, Rectangle.Empty, 0, 0, false, new Dictionary<string, int>(), new Dictionary<string, int>());
-                return false;
+                return unknown;
             }
 
             int insetX = Math.Max(4, selectedSlot.Value.Width / 18);
@@ -6540,7 +6534,7 @@ namespace HD2_Helper
             if (inner.Width <= 0 || inner.Height <= 0)
             {
                 SaveEquippedSlotDetectionDebug(cap, searchRegion, selectedSlot, inner, 0, 0, false, new Dictionary<string, int>(), new Dictionary<string, int>());
-                return false;
+                return unknown;
             }
 
             int contentPixels = 0;
@@ -6564,19 +6558,20 @@ namespace HD2_Helper
 
             int occupiedThreshold = Math.Max(65, inner.Width * inner.Height / 45);
             bool occupied = contentPixels >= occupiedThreshold;
+            string? equippedName;
             using (var icon = cap.Clone(inner, PixelFormat.Format32bppArgb))
                 equippedName = _stratagemRuntime?.Match(icon);
             occupied |= equippedName != null;
             int centerX = selectedSlot.Value.Left + selectedSlot.Value.Width / 2;
-            selectedIndex = Math.Clamp(centerX * 4 / cap.Width, 0, 3);
+            int selectedIndex = Math.Clamp(centerX * 4 / cap.Width, 0, 3);
             // The search region covers the four equally spaced prep slots. Borderline content is unknown, not empty.
-            located = equippedName != null || contentPixels == 0;
-            if (!located)
+            var observation = StratagemSlotObservation.FromEvidence(selectedIndex, true, equippedName, contentPixels);
+            if (!observation.Known)
                 SaveEquippedSlotDetectionDebug(cap, searchRegion, selectedSlot, inner, contentPixels, occupiedThreshold, occupied, contentCategories, contentColors);
 
 
 
-            return occupied;
+            return observation;
         }
 
         private static Rectangle? TryFindSelectedSlotRegion(Bitmap bitmap)

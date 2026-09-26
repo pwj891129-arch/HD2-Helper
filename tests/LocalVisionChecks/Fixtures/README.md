@@ -16,3 +16,11 @@ reselection. Runtime acceptance requires score/margin of 0.88/0.06 or 0.84/0.12,
 excluded items as competitors, and requires stable observations before selecting.
 `equipped-four.png` is a user-provided four-slot header crop; RuntimeSelectionChecks
 exercises the production border finder and classifier without sending game input.
+
+2.0.35.12-test feeds explicit Unknown/Empty/Equipped observations into the planner.
+ReselectionChecks covers initial selection, mixed slots, replacement, and no-op
+plans. Empty observations need three consistent reads; equipped icons need two.
+Unmatched visible content and missing borders cannot authorize an empty-slot plan.
+Perception determines the slot state; deterministic planning, not a language model,
+enforces duplicate and same-kind equipment restrictions. Live game transitions
+remain unverified by these offline checks.

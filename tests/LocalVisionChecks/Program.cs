@@ -50,6 +50,17 @@ internal static class Checks
         catch (OperationCanceledException) { Console.WriteLine("PASS: cancellation"); }
         Assert(recognizer.DeleteSamples(recognizer.Items.Single(i => i.Name == "LAS-12 사이")) == 1, "delete mislabeled samples");
         Assert(recognizer.Recognize(sai, "주 무기", true, CancellationToken.None).Candidates.Count == 0, "deleted samples no longer match");
+        Assert(StratagemNames.Canonicalize("고속 정찰 차량") == "M-102 포격 FRV", "legacy vehicle name canonicalized");
+        Assert(StratagemNames.Canonicalize("보급 고속 정찰 차량") == "보급 고속 정찰 차량", "supply vehicle not renamed");
+        string legacyHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("스트라타젬\n고속 정찰 차량")));
+        string legacySamples = Path.Combine(temporary, "local-vision", "samples", legacyHash);
+        Directory.CreateDirectory(legacySamples);
+        using (var vehicle = new Bitmap(Path.Combine(root, "images", "Stratagems", "고속 정찰 차량.png")))
+        {
+            vehicle.Save(Path.Combine(legacySamples, "previous-version.png"));
+            result = recognizer.Recognize(vehicle, "스트라타젬", true, CancellationToken.None);
+            Assert(result.Candidates[0].Name == "M-102 포격 FRV", "legacy AI reference remains accessible under new name");
+        }
         Application.EnableVisualStyles();
         using var form = new LocalVisionForm(root, temporary);
         var setImage = typeof(LocalVisionForm).GetMethod("SetImage", BindingFlags.Instance | BindingFlags.NonPublic)!;

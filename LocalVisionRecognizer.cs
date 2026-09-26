@@ -158,7 +158,7 @@ internal sealed class LocalVisionRecognizer : IDisposable
     }
 
     private string SampleDirectory(VisionItem item) => Path.Combine(_sampleRoot,
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(item.Type + "\n" + item.Name))));
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(item.Type + "\n" + StratagemNames.StorageName(item.Name)))));
 
     public void SaveSample(Bitmap image, VisionItem item)
     {

@@ -1451,6 +1451,7 @@ namespace HD2_Helper
                             .Select(item => item.GetString())
                             .Where(item => !string.IsNullOrWhiteSpace(item))
                             .Select(item => item!.Trim())
+                            .Select(StratagemNames.Canonicalize)
                             .Distinct()
                             .OrderBy(item => item)
                             .ToArray()
@@ -1616,7 +1617,7 @@ namespace HD2_Helper
                 {
                     if (index >= slots.Length) break;
 
-                    string? name = item.GetString();
+                    string? name = item.GetString() is string savedName ? StratagemNames.Canonicalize(savedName) : null;
                     slots[index++] = name;
 
                     if (!string.IsNullOrEmpty(name))
@@ -1746,6 +1747,7 @@ namespace HD2_Helper
             var items = File.Exists(DisabledItemsPath)
                 ? File.ReadAllLines(DisabledItemsPath, Encoding.UTF8)
                     .Select(line => line.Trim())
+                    .Select(StratagemNames.Canonicalize)
                     .Where(line => line.Length > 0 && !line.StartsWith(";") && !line.StartsWith("#"))
                     .Distinct()
                     .ToHashSet(StringComparer.Ordinal)
@@ -1788,7 +1790,7 @@ namespace HD2_Helper
         private static void SaveDisabledItems(IEnumerable<string> items)
         {
             Directory.CreateDirectory(AppDataPath);
-            File.WriteAllLines(DisabledItemsPath, items, Encoding.UTF8);
+            File.WriteAllLines(DisabledItemsPath, items.Select(StratagemNames.Canonicalize).Distinct(StringComparer.Ordinal), Encoding.UTF8);
         }
 
         private void SendDisabledItemsToWeb(WebView2? target = null)
@@ -3533,6 +3535,7 @@ namespace HD2_Helper
 
         private Image? GetStratagemImage(string name)
         {
+            name = StratagemNames.Canonicalize(name);
             if (_imageCache.TryGetValue(name, out var cached))
                 return cached;
 
@@ -7420,7 +7423,7 @@ namespace HD2_Helper
                     foreach (var item in stratagemsElement.EnumerateArray())
                     {
                         if (index >= stratagems.Length) break;
-                        stratagems[index++] = item.GetString() ?? "";
+                        stratagems[index++] = StratagemNames.Canonicalize(item.GetString() ?? "");
                     }
                 }
 

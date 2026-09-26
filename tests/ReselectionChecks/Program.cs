@@ -66,6 +66,6 @@ using var db = JsonDocument.Parse(File.ReadAllText(args[0]));
 var vehicles = db.RootElement.GetProperty("스트라타젬").GetProperty("보급").EnumerateArray()
     .Where(x => x.TryGetProperty("ExclusiveGroup", out _)).ToDictionary(x => x.GetProperty("Name").GetString()!, x => x.GetProperty("ExclusiveGroup").GetString()!);
 Assert(vehicles["해방자 엑소슈트"] == vehicles["애국자 엑소슈트"], "Exosuit metadata");
-Assert(vehicles["고속 정찰 차량"] == vehicles["보급 고속 정찰 차량"], "Recon metadata");
+Assert(vehicles["M-102 포격 FRV"] == vehicles["보급 고속 정찰 차량"], "Recon metadata");
 Assert(vehicles.Values.Distinct().Count() == 3, "Vehicle kinds must remain separate");
 Console.WriteLine("PASS: database separates tank, exosuit, and recon groups");

@@ -3047,7 +3047,7 @@
                 if (data.type === 'DISABLED_ITEMS_LOADED' && Array.isArray(data.items)) {
                     excludedItems.clear();
                     data.items.forEach(name => {
-                        if (typeof name === 'string' && name.trim()) excludedItems.add(name.trim());
+                        if (typeof name === 'string' && name.trim()) excludedItems.add(normalizeStratagemName(name.trim()));
                     });
 
                     if (currentTargetSlot) refreshCurrentModal();
@@ -4109,11 +4109,15 @@
             };
         }
 
+        function normalizeStratagemName(name) {
+            return name === '고속 정찰 차량' ? 'M-102 포격 FRV' : name;
+        }
+
         function normalizeStratagemLoadout(loadout = {}) {
             return {
                 stratagems: Array.from({ length: getStratagemSlotCount() }, (_, index) => {
                     const value = Array.isArray(loadout.stratagems) ? loadout.stratagems[index] : '';
-                    return typeof value === 'string' ? value : '';
+                    return typeof value === 'string' ? normalizeStratagemName(value) : '';
                 })
             };
         }
@@ -5641,7 +5645,7 @@
 
                         const card = document.createElement('div');
                         card.className = `mini-card ${statusClass}`;
-                        card.setAttribute('data-name', normalizeSearchText(item.Name));
+                        card.setAttribute('data-name', getItemSearchText(type, item));
                         card.setAttribute('data-raw-name', item.Name);
                         card.setAttribute('data-rule-disabled', statusClass.includes('disabled') && !excludedItems.has(item.Name) ? 'true' : 'false');
                         card.setAttribute('tabindex', '-1');

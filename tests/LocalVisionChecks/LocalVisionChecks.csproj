@@ -13,6 +13,7 @@
   <ItemGroup>
     <Compile Include="..\..\LocalVisionRecognizer.cs" Link="LocalVisionRecognizer.cs" />
     <Compile Include="..\..\LocalVisionForm.cs" Link="LocalVisionForm.cs" />
+    <Compile Include="..\..\StratagemNames.cs" Link="StratagemNames.cs" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.22.1" />
   </ItemGroup>
 </Project>

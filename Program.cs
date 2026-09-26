@@ -5058,6 +5058,25 @@ namespace HD2_Helper
         {
             return Regex.Replace(RepairScanText(input), @"[^가-힣a-zA-Z0-9]", "").ToUpperInvariant();
         }
+        private static double ScoreOcrNameCandidates(string[] candidates, string name, string targetType)
+        {
+            string cleanDb = CleanScanText(name);
+            if (targetType != "스트라타젬")
+            {
+                // '사이'가 '사이스'의 부분 일치와 동점이 되지 않도록 모델명/이름의 완전 일치를 우선한다.
+                if (candidates.Contains(cleanDb))
+                    return 1.3;
+
+                string nameWithoutCode = Regex.Replace(name, @"^\s*[A-Za-z]{1,5}[A-Za-z0-9/.-]{1,10}\s+", "");
+                string cleanName = CleanScanText(nameWithoutCode);
+                if (!string.IsNullOrEmpty(cleanName) && candidates.Contains(cleanName))
+                    return 1.2;
+            }
+
+            return candidates.Select(candidate => CalculateOcrNameSimilarity(candidate, cleanDb, targetType))
+                .DefaultIfEmpty(0.0).Max();
+        }
+
         private static double CalculateOcrNameSimilarity(string cleanOcr, string cleanDb, string targetType)
         {
             if (string.IsNullOrWhiteSpace(cleanOcr) || string.IsNullOrWhiteSpace(cleanDb))
@@ -5527,11 +5546,7 @@ namespace HD2_Helper
                             var matchResult = _parsedData
                                 .Where(x => x.Type == targetType)
                                 .Select(x => {
-                                    string cleanDB = CleanScanText(x.Name);
-                                    double sim = cleanOcrCandidates
-                                        .Select(cleanOCR => CalculateOcrNameSimilarity(cleanOCR, cleanDB, targetType))
-                                        .DefaultIfEmpty(0.0)
-                                        .Max();
+                                    double sim = ScoreOcrNameCandidates(cleanOcrCandidates, x.Name, targetType);
                                     return new { Item = x, Similarity = sim };
                                 })
                                 .OrderByDescending(x => x.Similarity)

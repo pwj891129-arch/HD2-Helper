@@ -1757,6 +1757,14 @@ namespace HD2_Helper
                 File.WriteAllText(saiDefaultExcludedPath, "1", Encoding.UTF8);
             }
 
+            string burntOfferingDefaultExcludedPath = Path.Combine(AppDataPath, "disabled-default-g8-burnt-offering.txt");
+            if (!File.Exists(burntOfferingDefaultExcludedPath))
+            {
+                items.Add("G-8 번제");
+                SaveDisabledItems(items);
+                File.WriteAllText(burntOfferingDefaultExcludedPath, "1", Encoding.UTF8);
+            }
+
             _disabledItems = items;
             return items.OrderBy(item => item, StringComparer.Ordinal).ToArray();
         }

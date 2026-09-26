@@ -62,6 +62,26 @@ internal static class Checks
             Assert(result.Candidates[0].Name == "M-102 포격 FRV", "legacy AI reference remains accessible under new name");
         }
         Application.EnableVisualStyles();
+        using var db = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "database.json")));
+        var runtimeNames = db.RootElement.GetProperty("스트라타젬").EnumerateObject()
+            .Where(c => c.Name != "임무" && c.Name != "패시브")
+            .SelectMany(c => c.Value.EnumerateArray().Select(i => i.GetProperty("Name").GetString()!)).ToArray();
+        timer.Restart();
+        var runtime = new StratagemRuntimeRecognizer(root, runtimeNames);
+        Console.WriteLine($"Runtime reference preparation: {timer.ElapsedMilliseconds} ms");
+        Assert(StratagemRuntimeRecognizer.Choose(new[] { ("A", .95f), ("B", .94f) }) == null, "runtime rejects close competitors");
+        Assert(StratagemRuntimeRecognizer.Choose(new[] { ("A", .83f), ("B", .5f) }) == null, "runtime rejects weak best match");
+        Assert(StratagemRuntimeRecognizer.Choose(new[] { ("A", .85f), ("B", .8f) }) == null, "lower score requires wider margin");
+        Assert(StratagemRuntimeRecognizer.Choose(new[] { ("A", .85f), ("B", .5f) }) == "A", "distinct small icon accepted");
+        Assert(StratagemRuntimeRecognizer.Choose(new[] { ("A", .99f) }) == null, "runtime rejects single candidate");
+        var bounds = new Rectangle(10, 10, 100, 100);
+        Assert(StratagemRuntimeRecognizer.Stable("A", bounds, "A", bounds, 40), "stable two-frame confirmation");
+        Assert(!StratagemRuntimeRecognizer.Stable("A", bounds, "B", bounds, 40), "changed candidate rejected");
+        Assert(!StratagemRuntimeRecognizer.Stable("A", bounds, "A", new Rectangle(50, 10, 100, 100), 40), "moving slot rejected");
+        Assert(!StratagemRuntimeRecognizer.Stable("A", bounds, "A", bounds, 300), "stale observation rejected");
+        Assert(!StratagemRuntimeRecognizer.Stable("A", bounds, "A", bounds, 0), "same-frame repetition rejected");
+        Assert(!StratagemRuntimeRecognizer.Stable(null, bounds, null, bounds, 40), "unknown observations rejected");
+        Assert(runtime.Match(blank) == null, "runtime blank abstention");
         foreach (var (file, expected) in new[] {
             ("codex-clipboard-446a2d3d-16cb-4edd-8005-f093450396f5.png", "방어막 생성 팩"),
             ("codex-clipboard-e1b47a50-7573-46d2-8d95-1034d1ee6f00.png", "방향 방패") })
@@ -72,6 +92,9 @@ internal static class Checks
             Console.WriteLine(string.Join(", ", result.Candidates.Select(c => $"{c.Name}={c.Similarity:F3}")));
             Assert(result.Candidates[0].Name == expected && !result.Uncertain, "actual HUD: " + expected);
             Console.WriteLine($"HUD recognition: {timer.ElapsedMilliseconds} ms");
+            timer.Restart();
+            Assert(runtime.Match(capture) == expected, "runtime strict HUD: " + expected);
+            Console.WriteLine($"Runtime HUD recognition: {timer.ElapsedMilliseconds} ms");
         }
         foreach (string name in new[] { "방향 방패", "방어막 생성 팩", "탄도 방패 배낭", "가드 독", "로버", "핫도그", "작살총", "M-102 포격 FRV", "벌목꾼", "바스티온 MK XVI", "이글 가스 공중타격" })
         {
@@ -84,6 +107,9 @@ internal static class Checks
             }
             result = recognizer.Recognize(small, "스트라타젬", false, CancellationToken.None);
             Assert(result.Candidates[0].Name == name, "reduced icon: " + name);
+            string? runtimeName = runtime.Match(small);
+            Assert(runtimeName == null || runtimeName == name, "runtime reduced icon must match or abstain: " + name);
+            Console.WriteLine($"Runtime reduced result: {runtimeName ?? "uncertain"}");
         }
         using var form = new LocalVisionForm(root, temporary);
         var setImage = typeof(LocalVisionForm).GetMethod("SetImage", BindingFlags.Instance | BindingFlags.NonPublic)!;

@@ -8,9 +8,17 @@ internal sealed class StratagemIconMatcher
 
     public void Remove(string path) => _references.Remove(path);
 
+    public void Prepare(string path)
+    {
+        if (_references.ContainsKey(path)) return;
+        using var bitmap = new Bitmap(path);
+        _references[path] = Extract(bitmap);
+    }
+
     internal static float[][] Extract(Bitmap image)
     {
         var result = new float[2][];
+        var pixels = new IconPixelSnapshot(image);
         for (int channel = 0; channel < 2; channel++)
         {
             using var mask = new Bitmap(image.Width, image.Height);
@@ -18,7 +26,7 @@ internal sealed class StratagemIconMatcher
             for (int y = 0; y < image.Height; y++)
                 for (int x = 0; x < image.Width; x++)
                 {
-                    Color c = image.GetPixel(x, y);
+                    Color c = pixels.GetPixel(x, y);
                     int min = Math.Min(c.R, Math.Min(c.G, c.B));
                     int max = Math.Max(c.R, Math.Max(c.G, c.B));
                     bool foreground = c.A >= 128 && (channel == 0
@@ -49,11 +57,8 @@ internal sealed class StratagemIconMatcher
 
     public float Compare(float[][] query, string path)
     {
-        if (!_references.TryGetValue(path, out var reference))
-        {
-            using var bitmap = new Bitmap(path);
-            _references[path] = reference = Extract(bitmap);
-        }
+        Prepare(path);
+        var reference = _references[path];
         float score = 0;
         for (int channel = 0; channel < 2; channel++)
         {

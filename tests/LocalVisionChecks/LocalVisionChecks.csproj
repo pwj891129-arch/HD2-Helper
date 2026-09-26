@@ -15,6 +15,8 @@
     <Compile Include="..\..\LocalVisionForm.cs" Link="LocalVisionForm.cs" />
     <Compile Include="..\..\StratagemNames.cs" Link="StratagemNames.cs" />
     <Compile Include="..\..\StratagemIconMatcher.cs" Link="StratagemIconMatcher.cs" />
+    <Compile Include="..\..\StratagemRuntimeRecognizer.cs" Link="StratagemRuntimeRecognizer.cs" />
+    <Compile Include="..\..\IconPixelSnapshot.cs" Link="IconPixelSnapshot.cs" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.22.1" />
   </ItemGroup>
 </Project>

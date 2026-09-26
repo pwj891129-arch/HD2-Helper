@@ -9,4 +9,10 @@ Stratagem retrieval compares aligned white markings (70%) and colored silhouette
 Scores are not probabilities. Gates remain experimental; these two captures and
 resized references do not establish accuracy across all resolutions or HUD states.
 Select one complete icon without neighboring icons; occlusion, bright backgrounds,
-and missing detail may require a new capture. Automatic reselection is unchanged.
+and missing detail may require a new capture.
+
+2.0.35.11-test also uses cached built-in references for automatic stratagem
+reselection. Runtime acceptance requires score/margin of 0.88/0.06 or 0.84/0.12, includes
+excluded items as competitors, and requires stable observations before selecting.
+`equipped-four.png` is a user-provided four-slot header crop; RuntimeSelectionChecks
+exercises the production border finder and classifier without sending game input.

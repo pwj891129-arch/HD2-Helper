@@ -164,6 +164,8 @@ namespace HD2_Helper
         private AutoReloadCalibrationForm? _autoReloadCalibrationForm;
         private AmmoMemoryScannerForm? _ammoMemoryScannerForm;
         private LocalVisionForm? _localVisionForm;
+        private Task<StratagemRuntimeRecognizer>? _stratagemRuntimePreparation;
+        private StratagemRuntimeRecognizer? _stratagemRuntime;
         private System.Windows.Forms.Timer? _crosshairTimer;
         private System.Windows.Forms.Timer? _supportWeaponGaugeTimer;
         private System.Windows.Forms.Timer? _autoReloadDetectionTimer;
@@ -652,6 +654,9 @@ namespace HD2_Helper
         {
             // 데이터 불러오기
             LoadDatabase();
+            var iconNames = _parsedData.Where(d => d.Type == "스트라타젬" && d.Category != "임무" && d.Category != "패시브")
+                .Select(d => d.Name).ToArray();
+            _stratagemRuntimePreparation = Task.Run(() => new StratagemRuntimeRecognizer(AppDomain.CurrentDomain.BaseDirectory, iconNames));
             LoadUserSetting();
             LoadSetting();
             // 저장된 여분 슬롯 수는 창이 만들어진 뒤 읽히므로, 시작할 때도 슬롯 행 수에 맞춰 높이를 보정한다.
@@ -5240,8 +5245,11 @@ namespace HD2_Helper
         }
 
 
-        private string? MatchStratagemIconFromScreen()
+        private string? MatchStratagemIconFromScreen() => MatchStratagemIconFromScreen(out _);
+
+        private string? MatchStratagemIconFromScreen(out Rectangle selectedBounds)
         {
+            selectedBounds = Rectangle.Empty;
             try
             {
                 if (!TryBuildGameScreenRect(55, 390, 430, 650, out Rectangle searchRegion))
@@ -5266,8 +5274,8 @@ namespace HD2_Helper
                 }
 
                 // 조각난 노란 선택 테두리를 먼저 하나의 슬롯 사각형으로 묶고, 실제 비교는 슬롯 안쪽 정사각형 crop으로 수행한다.
-                int insetX = Math.Max(10, selectedSlot.Value.Width / 7);
-                int insetY = Math.Max(10, selectedSlot.Value.Height / 7);
+                int insetX = Math.Max(4, selectedSlot.Value.Width / 18);
+                int insetY = Math.Max(4, selectedSlot.Value.Height / 18);
                 Rectangle inner = Rectangle.Intersect(Rectangle.Inflate(selectedSlot.Value, -insetX, -insetY), new Rectangle(Point.Empty, capture.Size));
                 if (inner.Width <= 0 || inner.Height <= 0)
                 {
@@ -5277,31 +5285,10 @@ namespace HD2_Helper
                 }
 
                 using Bitmap crop = capture.Clone(inner, PixelFormat.Format32bppArgb);
-                using Bitmap screenIcon = ResizeBitmapForIconMatch(crop, 64);
-
-                string? bestName = null;
-                double bestScore = 0.0;
-                foreach (var item in _parsedData.Where(d => d.Type == "스트라타젬" && d.Category != "임무" && d.Category != "패시브" && !_disabledItems.Contains(d.Name)))
-                {
-                    Image? templateImage = GetStratagemImage(item.Name);
-                    if (templateImage == null)
-                        continue;
-
-                    using Bitmap templateIcon = ResizeBitmapForIconMatch(templateImage, 64);
-                    double score = CompareIconBitmaps(screenIcon, templateIcon);
-                    if (score > bestScore)
-                    {
-                        bestScore = score;
-                        bestName = item.Name;
-                    }
-                }
-
-                // 아이콘 매칭은 OCR 실패 시 보조 수단이라 낮은 점수로 보정 이동을 만들면 인접 스트라타젬 오선택으로 이어질 수 있다.
-                string? matchedName = bestScore >= StratagemIconFallbackMinScore ? bestName : null;
+                string? matchedName = _stratagemRuntime?.Match(crop);
                 Rectangle absoluteSlot = new(searchRegion.Left + selectedSlot.Value.Left, searchRegion.Top + selectedSlot.Value.Top, selectedSlot.Value.Width, selectedSlot.Value.Height);
-                Rectangle absoluteInner = new(searchRegion.Left + inner.Left, searchRegion.Top + inner.Top, inner.Width, inner.Height);
-                _lastIconMatchDebugLine = $"region={FormatRectangle(searchRegion)}, yellowComponents={yellowComponentCount}, candidates={slotCandidates.Count}, selectedSlot={FormatRectangle(absoluteSlot)}, iconCrop={FormatRectangle(absoluteInner)}, best={(bestName ?? "(none)")}, score={bestScore:0.000}, matched={(matchedName ?? "(null)")}";
-                SaveStratagemIconMatchDebug(capture, searchRegion, slotCandidates, selectedSlot, inner, bestName, bestScore, matchedName, "matched", yellowComponentCount);
+                selectedBounds = absoluteSlot;
+                _lastIconMatchDebugLine = $"cached-detail-icon, selectedSlot={FormatRectangle(absoluteSlot)}, matched={(matchedName ?? "(uncertain)")}";
                 return matchedName;
             }
             catch (Exception ex)
@@ -5669,6 +5656,23 @@ namespace HD2_Helper
 
         private async Task RunAutoSelection()
         {
+            if (_stratagemReselectEnabled && _currentSlots.Any(name => !string.IsNullOrWhiteSpace(name)))
+            {
+                try
+                {
+                    if (_stratagemRuntimePreparation == null) return;
+                    _stratagemRuntime = await _stratagemRuntimePreparation;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log("스트라타젬 아이콘 준비 실패: " + ex.Message);
+                    if (!IsDisposed)
+                        BeginInvoke(new Action(() => MessageBox.Show(this, "아이콘 비교 데이터를 준비하지 못했습니다. 테스트 패키지의 images 폴더를 확인해 주세요.", "자동선택 중단", MessageBoxButtons.OK, MessageBoxIcon.Warning)));
+                    return;
+                }
+                ThrowIfAutoSelectionCanceled();
+                if (!IsGameActive()) return;
+            }
             await TestModeStepAsync("자동선택 시작");
             if (_currentLoadoutSlots.Any(s => !string.IsNullOrEmpty(s)))
             {
@@ -5738,7 +5742,7 @@ namespace HD2_Helper
 
             void CaptureAutoSelectionDebug(string label, bool important = false)
             {
-                if (!_testModeEnabled)
+                if (!_testModeEnabled || !important)
                     return;
 
                 string? path = SaveAutoSelectionScreenCapture(autoDebugRunId, label);
@@ -5770,34 +5774,39 @@ namespace HD2_Helper
                 LogAutoSelectionDebug($"arrivalReadDelay.{reason}={delayMs}ms");
             }
 
-            void LogLastOcrDetail(string label)
-            {
-                if (!_testModeEnabled || string.IsNullOrWhiteSpace(_lastOcrMatchDebugLine))
-                    return;
-
-                // OCR 실패는 원문/후보/최고점수를 같이 봐야 원인 추적이 되므로 테스트모드 로그에 마지막 OCR 상세값을 붙인다.
-                LogAutoSelectionDebug($"{label}: {_lastOcrMatchDebugLine}");
-            }
-
             void LogLastIconDetail(string label)
             {
                 if (!_testModeEnabled || string.IsNullOrWhiteSpace(_lastIconMatchDebugLine))
                     return;
 
-                // 아이콘 판독은 OCR 실패 시에만 보조로 쓰이므로, 선택 영역과 최고 점수를 따로 남긴다.
+                // Log metadata without writing screen images on the successful hot path.
                 LogAutoSelectionDebug($"{label}: {_lastIconMatchDebugLine}");
             }
 
-            async Task<string?> MatchStratagemNameWithIconFallback(string detailLabel)
+            long lastStableIconAt = 0;
+            async Task<string?> MatchStableStratagemIcon(string detailLabel)
             {
-                string? name = await MatchItemFromScreen("스트라타젬");
-                LogLastOcrDetail($"{detailLabel}.ocrDetail");
-                if (name != null)
-                    return name;
-
-                string? iconName = MatchStratagemIconFromScreen();
-                LogLastIconDetail($"{detailLabel}.iconDetail");
-                return iconName;
+                string? previous = null;
+                Rectangle previousBounds = Rectangle.Empty;
+                long previousTime = 0;
+                for (int attempt = 0; attempt < 3; attempt++)
+                {
+                    ThrowIfAutoSelectionCanceled();
+                    if (!IsGameActive()) throw new OperationCanceledException();
+                    string? current = MatchStratagemIconFromScreen(out Rectangle bounds);
+                    long now = Environment.TickCount64;
+                    if (StratagemRuntimeRecognizer.Stable(previous, previousBounds, current, bounds, now - previousTime))
+                    {
+                        lastStableIconAt = now;
+                        return current;
+                    }
+                    previous = current;
+                    previousBounds = bounds;
+                    previousTime = now;
+                    LogLastIconDetail($"{detailLabel}.iconDetail");
+                    if (attempt < 2) await Task.Delay(35);
+                }
+                return null;
             }
 
             async Task MoveToTarget((int Group, int Row, int Col) target, int curG, int curR, int curC, int totalTabs, int colCount, List<int> groupItemCounts, List<string>? keyLog = null, bool pressSelect = true)
@@ -6022,23 +6031,24 @@ namespace HD2_Helper
                 {
                     string? previous = null;
                     bool hasPrevious = false;
+                    long previousTime = 0;
                     for (int attempt = 0; attempt < 3; attempt++)
                     {
                         ThrowIfAutoSelectionCanceled();
                         if (!IsGameActive()) throw new OperationCanceledException();
-                        bool occupied = IsSelectedEquippedStratagemSlotOccupied(out bool located, out int actualSlot);
-                        string? name = null;
+                        bool occupied = IsSelectedEquippedStratagemSlotOccupied(out bool located, out int actualSlot, out string? name);
                         bool known = located && actualSlot == slot;
                         if (known && occupied)
                         {
-                            name = await MatchStratagemNameWithIconFallback($"plan.slot-{slot + 1}");
                             known = name != null && itemMap.ContainsKey(name);
                         }
-                        if (known && hasPrevious && string.Equals(previous, name, StringComparison.Ordinal))
+                        long now = Environment.TickCount64;
+                        if (known && hasPrevious && now - previousTime <= 250 && string.Equals(previous, name, StringComparison.Ordinal))
                             return (true, name);
                         previous = name;
+                        previousTime = now;
                         hasPrevious = known;
-                        await Task.Delay(75);
+                        if (attempt < 2) await Task.Delay(35);
                     }
                     return (false, null);
                 }
@@ -6181,7 +6191,7 @@ namespace HD2_Helper
                             curG = equippedPosition.Group;
                             curR = equippedPosition.Row;
                             curC = equippedPosition.Col;
-                            currentPositionInitialized = true;
+                            currentPositionInitialized = false;
                             LogAutoSelectionDebug($"equippedSlot.replaceStart slot={selected.SlotIndex + 1}, current={equippedName}, currentPos=G{curG}/R{curR}/C{curC}, target={selected.Name}, targetPos=G{target.Group}/R{target.Row}/C{target.Col}");
                         }
                         else
@@ -6195,7 +6205,7 @@ namespace HD2_Helper
 
                     if (stratagemReselectEnabled && !currentPositionInitialized)
                     {
-                        string? currentName = await MatchStratagemNameWithIconFallback("startPosition");
+                        string? currentName = await MatchStableStratagemIcon("startPosition");
                         if (currentName != null && itemMap.TryGetValue(currentName, out var current))
                         {
                             // 선택창이 기억한 카테고리/칸을 현재 판독 결과로 보정한다.
@@ -6225,15 +6235,7 @@ namespace HD2_Helper
                     {
                         await WaitAfterMoveBeforeArrivalRead($"slot-{selected.SlotIndex + 1}");
                         CaptureAutoSelectionDebug($"arrival-before-select-slot-{selected.SlotIndex + 1}");
-                        for (int retry = 0; retry < 3; retry++)
-                        {
-                            arrivalName = await MatchStratagemNameWithIconFallback($"arrivalCheck.slot-{selected.SlotIndex + 1}.try-{retry + 1}");
-                            if (arrivalName != null)
-                                break;
-
-                            if (retry < 2)
-                                await Task.Delay(25);
-                        }
+                        arrivalName = await MatchStableStratagemIcon($"arrivalCheck.slot-{selected.SlotIndex + 1}");
 
                         arrivalMatchesTarget = string.Equals(arrivalName, selected.Name, StringComparison.Ordinal);
                         LogAutoSelectionDebug($"arrivalCheck slot={selected.SlotIndex + 1}, expected={selected.Name}, ocr={(arrivalName ?? "(null)")}, match={arrivalMatchesTarget}");
@@ -6255,7 +6257,7 @@ namespace HD2_Helper
 
                             await WaitAfterMoveBeforeArrivalRead($"correction-slot-{selected.SlotIndex + 1}");
                             CaptureAutoSelectionDebug($"arrival-after-correction-slot-{selected.SlotIndex + 1}", important: true);
-                            arrivalName = await MatchStratagemNameWithIconFallback($"arrivalCorrection.slot-{selected.SlotIndex + 1}");
+                            arrivalName = await MatchStableStratagemIcon($"arrivalCorrection.slot-{selected.SlotIndex + 1}");
                             arrivalMatchesTarget = string.Equals(arrivalName, selected.Name, StringComparison.Ordinal);
                             LogAutoSelectionDebug($"arrivalCorrection.result slot={selected.SlotIndex + 1}, expected={selected.Name}, ocr={(arrivalName ?? "(null)")}, match={arrivalMatchesTarget}");
                         }
@@ -6277,6 +6279,14 @@ namespace HD2_Helper
                     }
 
                     keyLog.Add("Space:select-after-arrival-check");
+                    if (stratagemReselectEnabled && Environment.TickCount64 - lastStableIconAt > 150)
+                    {
+                        if (await MatchStableStratagemIcon("before-select.freshness") != selected.Name)
+                        {
+                            AbortReselection("선택 직전 화면이 달라졌거나 불확실합니다. 선택하지 않고 중단했습니다.");
+                            return;
+                        }
+                    }
                     if (!IsGameActive()) throw new OperationCanceledException();
                     await TapKey(Keys.Space, holdMs: Math.Max(_inputDelay, 120), afterMs: GetMenuMotionSettleDelay());
                     LogAutoSelectionDebug($"selectKey=Space, expected={selected.Name}, selectedByArrival={(arrivalName ?? "(unknown)")}, holdMs={Math.Max(_inputDelay, 120)}, afterMs={GetMenuMotionSettleDelay()}");
@@ -6290,17 +6300,26 @@ namespace HD2_Helper
                     if (stratagemReselectEnabled)
                     {
                         bool? menuState = null;
-                        for (int attempt = 0; attempt < 3 && menuState == null; attempt++)
+                        bool? previousMenuState = null;
+                        for (int attempt = 0; attempt < 3; attempt++)
                         {
-                            await Task.Delay(150);
-                            menuState = await ReadStratagemSelectionMenuState();
+                            ThrowIfAutoSelectionCanceled();
+                            if (!IsGameActive()) throw new OperationCanceledException();
+                            bool? currentMenuState = await ReadStratagemSelectionMenuState();
+                            if (currentMenuState.HasValue && currentMenuState == previousMenuState)
+                            {
+                                menuState = currentMenuState;
+                                break;
+                            }
+                            previousMenuState = currentMenuState;
+                            if (attempt < 2) await Task.Delay(35);
                         }
                         if (menuState == null) { AbortReselection("선택 후 화면 상태를 확인하지 못했습니다. 추가 입력을 중단했습니다."); return; }
                         prepSlotIndex = selected.SlotIndex;
                         if (menuState == true)
                         {
                             // 빈 칸 선택 후 게임이 다음 칸을 열 수 있으므로 실제 포커스를 읽고 닫는다.
-                            IsSelectedEquippedStratagemSlotOccupied(out bool located, out int focusedSlot);
+                            IsSelectedEquippedStratagemSlotOccupied(out bool located, out int focusedSlot, out _);
                             if (!located) { AbortReselection("선택 후 슬롯 포커스를 확인하지 못했습니다."); return; }
                             prepSlotIndex = focusedSlot;
                             await TapKey(Keys.Escape);
@@ -6360,7 +6379,7 @@ namespace HD2_Helper
             return TryBuildGameScreenRect(45, 250, 360, 150, out searchRegion);
         }
 
-        private static List<Rectangle> BuildSelectedSlotCandidates(List<(Rectangle Rect, int Pixels)> yellowComponents, Bitmap screenCapture, Size searchSize)
+        private static List<Rectangle> BuildSelectedSlotCandidates(List<(Rectangle Rect, int Pixels)> yellowComponents, IconPixelSnapshot screenCapture, Size searchSize)
         {
             var candidates = new List<Rectangle>();
             const int slotJoinDistance = 92;
@@ -6407,7 +6426,7 @@ namespace HD2_Helper
                 .ToList();
         }
 
-        private static Rectangle RefineSlotRegionWithFrame(Bitmap bitmap, Rectangle approximateSlot)
+        private static Rectangle RefineSlotRegionWithFrame(IconPixelSnapshot bitmap, Rectangle approximateSlot)
         {
             Rectangle bitmapBounds = new(Point.Empty, bitmap.Size);
             Rectangle scanBounds = Rectangle.Intersect(Rectangle.Inflate(approximateSlot, 22, 22), bitmapBounds);
@@ -6454,7 +6473,7 @@ namespace HD2_Helper
             return bestScore >= minScore ? bestPosition : null;
         }
 
-        private static int CountFramePixelsOnVertical(Bitmap bitmap, int x, int top, int bottom)
+        private static int CountFramePixelsOnVertical(IconPixelSnapshot bitmap, int x, int top, int bottom)
         {
             int count = 0;
             for (int y = top; y < bottom; y++)
@@ -6466,7 +6485,7 @@ namespace HD2_Helper
             return count;
         }
 
-        private static int CountFramePixelsOnHorizontal(Bitmap bitmap, int y, int left, int right)
+        private static int CountFramePixelsOnHorizontal(IconPixelSnapshot bitmap, int y, int left, int right)
         {
             int count = 0;
             for (int x = left; x < right; x++)
@@ -6493,8 +6512,9 @@ namespace HD2_Helper
             return c.R > 175 && c.G > 145 && c.B < 95 && c.R - c.B > 100;
         }
 
-        private bool IsSelectedEquippedStratagemSlotOccupied(out bool located, out int selectedIndex)
+        private bool IsSelectedEquippedStratagemSlotOccupied(out bool located, out int selectedIndex, out string? equippedName)
         {
+            equippedName = null;
             located = false;
             selectedIndex = -1;
             if (!TryBuildEquippedStratagemSlotSearchRegion(out Rectangle searchRegion))
@@ -6513,8 +6533,8 @@ namespace HD2_Helper
                 return false;
             }
 
-            int insetX = Math.Max(8, selectedSlot.Value.Width / 6);
-            int insetY = Math.Max(8, selectedSlot.Value.Height / 6);
+            int insetX = Math.Max(4, selectedSlot.Value.Width / 18);
+            int insetY = Math.Max(4, selectedSlot.Value.Height / 18);
             Rectangle inner = Rectangle.Inflate(selectedSlot.Value, -insetX, -insetY);
             inner = Rectangle.Intersect(inner, new Rectangle(Point.Empty, cap.Size));
             if (inner.Width <= 0 || inner.Height <= 0)
@@ -6544,11 +6564,15 @@ namespace HD2_Helper
 
             int occupiedThreshold = Math.Max(65, inner.Width * inner.Height / 45);
             bool occupied = contentPixels >= occupiedThreshold;
+            using (var icon = cap.Clone(inner, PixelFormat.Format32bppArgb))
+                equippedName = _stratagemRuntime?.Match(icon);
+            occupied |= equippedName != null;
             int centerX = selectedSlot.Value.Left + selectedSlot.Value.Width / 2;
             selectedIndex = Math.Clamp(centerX * 4 / cap.Width, 0, 3);
             // The search region covers the four equally spaced prep slots. Borderline content is unknown, not empty.
-            located = occupied || contentPixels <= occupiedThreshold / 2;
-            SaveEquippedSlotDetectionDebug(cap, searchRegion, selectedSlot, inner, contentPixels, occupiedThreshold, occupied, contentCategories, contentColors);
+            located = equippedName != null || contentPixels == 0;
+            if (!located)
+                SaveEquippedSlotDetectionDebug(cap, searchRegion, selectedSlot, inner, contentPixels, occupiedThreshold, occupied, contentCategories, contentColors);
 
 
 
@@ -6560,8 +6584,9 @@ namespace HD2_Helper
             return ChooseSelectedSlotCandidate(FindSelectedSlotCandidates(bitmap, out _));
         }
 
-        private static List<Rectangle> FindSelectedSlotCandidates(Bitmap bitmap, out int yellowComponentCount)
+        private static List<Rectangle> FindSelectedSlotCandidates(Bitmap capture, out int yellowComponentCount)
         {
+            var bitmap = new IconPixelSnapshot(capture);
             var yellowComponents = new List<(Rectangle Rect, int Pixels)>();
             bool[,] visited = new bool[bitmap.Width, bitmap.Height];
             for (int y = 0; y < bitmap.Height; y++)
@@ -6943,7 +6968,7 @@ namespace HD2_Helper
             return builder.ToString();
         }
 
-        private static Rectangle FloodFillYellowComponent(Bitmap bitmap, bool[,] visited, int startX, int startY, out int pixelCount)
+        private static Rectangle FloodFillYellowComponent(IconPixelSnapshot bitmap, bool[,] visited, int startX, int startY, out int pixelCount)
         {
             int minX = startX, maxX = startX, minY = startY, maxY = startY;
             pixelCount = 0;
@@ -6980,6 +7005,13 @@ namespace HD2_Helper
 
         private async Task<bool?> ReadStratagemSelectionMenuState()
         {
+            if (_stratagemRuntime != null)
+            {
+                if (MatchStratagemIconFromScreen(out Rectangle selectedBounds) != null)
+                    return true;
+                // A visible list cursor with an uncertain icon is not evidence of a closed menu.
+                if (!selectedBounds.IsEmpty) return null;
+            }
             // 전체 화면 OCR은 팀원 카드의 "준비/장비" 같은 글자에 흔들릴 수 있으므로,
             // 먼저 실제 상세 패널 이름줄에서 스트라타젬명이 읽히는지 확인한다.
             string? visibleStratagemName = await MatchItemFromScreen("스트라타젬");

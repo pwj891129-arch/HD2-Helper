@@ -24,3 +24,9 @@ Unmatched visible content and missing borders cannot authorize an empty-slot pla
 Perception determines the slot state; deterministic planning, not a language model,
 enforces duplicate and same-kind equipment restrictions. Live game transitions
 remain unverified by these offline checks.
+
+`equipped-empty.png` is a historical local debug capture (2026-07-07) of a selected
+empty slot. Version .12's wide foreground crop reports 52 content pixels from its
+surroundings. Version .13 retains the wide icon comparison but uses the original
+inset interior for emptiness, which correctly reports zero. RuntimeSelectionChecks
+also verifies the empty crop is not identified as an equipment icon.

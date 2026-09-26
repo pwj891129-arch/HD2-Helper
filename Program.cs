@@ -5638,6 +5638,12 @@ namespace HD2_Helper
                 {
                     // 사용자가 자동선택 단축키를 다시 눌러 강제 중지한 경우에는 조용히 종료한다.
                 }
+                catch (Exception ex)
+                {
+                    Logger.Log("자동선택 오류: " + ex);
+                    if (!IsDisposed)
+                        BeginInvoke(new Action(() => MessageBox.Show(this, "자동선택 중 오류가 발생하여 입력을 중단했습니다. log.txt를 확인해 주세요.", "자동선택 중단", MessageBoxButtons.OK, MessageBoxIcon.Warning)));
+                }
                 finally
                 {
                     if (ReferenceEquals(_autoSelectionCts, cts))
@@ -5883,6 +5889,9 @@ namespace HD2_Helper
 
                 // 스트라타젬 선택창이 뜨기 전 준비화면을 상단 슬롯 검사로 오판하지 않도록 준비되지 않으면 중단한다.
                 LogAutoSelectionDebug("abort=stratagem-menu-ready-timeout");
+                Logger.Log("자동선택 중단: 스트라타젬 선택창 준비 확인 시간 초과. " + _lastIconMatchDebugLine);
+                if (!IsDisposed)
+                    BeginInvoke(new Action(() => MessageBox.Show(this, "스트라타젬 선택창이 열린 것을 확인하지 못했습니다. 화면 상태를 확인해 주세요.", "자동선택 중단", MessageBoxButtons.OK, MessageBoxIcon.Warning)));
                 CaptureAutoSelectionDebug("abort-stratagem-menu-ready-timeout", important: true);
                 await TestModeStepAsync("스트라타젬 선택창 확인 실패: 자동선택 중단", delay: false);
                 return false;
@@ -6013,6 +6022,7 @@ namespace HD2_Helper
                 void AbortReselection(string reason)
                 {
                     LogAutoSelectionDebug("abort=reselection-plan: " + reason);
+                    Logger.Log("자동 재선택 중단: " + reason);
                     if (!IsDisposed)
                         BeginInvoke(new Action(() => MessageBox.Show(this, reason, "스트라타젬 재선택 중단", MessageBoxButtons.OK, MessageBoxIcon.Warning)));
                 }
@@ -6508,6 +6518,9 @@ namespace HD2_Helper
             return c.R > 175 && c.G > 145 && c.B < 95 && c.R - c.B > 100;
         }
 
+        private static Rectangle GetEquippedSlotContentRegion(Rectangle slot, Size captureSize)
+            => Rectangle.Intersect(Rectangle.Inflate(slot, -Math.Max(8, slot.Width / 6), -Math.Max(8, slot.Height / 6)), new Rectangle(Point.Empty, captureSize));
+
         private StratagemSlotObservation ReadSelectedEquippedStratagemSlot()
         {
             var unknown = new StratagemSlotObservation(-1, StratagemSlotState.Unknown, null);
@@ -6540,9 +6553,12 @@ namespace HD2_Helper
             int contentPixels = 0;
             var contentCategories = new Dictionary<string, int>();
             var contentColors = new Dictionary<string, int>();
-            for (int y = inner.Top; y < inner.Bottom; y++)
+            // Wide crop preserves icon edges; only the inset interior can establish an empty slot.
+            Rectangle contentRegion = GetEquippedSlotContentRegion(selectedSlot.Value, cap.Size);
+            if (contentRegion.Width <= 0 || contentRegion.Height <= 0) return unknown;
+            for (int y = contentRegion.Top; y < contentRegion.Bottom; y++)
             {
-                for (int x = inner.Left; x < inner.Right; x++)
+                for (int x = contentRegion.Left; x < contentRegion.Right; x++)
                 {
                     Color pixel = cap.GetPixel(x, y);
                     if (TryClassifyEquippedSlotContentPixel(pixel, out string category))
@@ -6556,7 +6572,7 @@ namespace HD2_Helper
                 }
             }
 
-            int occupiedThreshold = Math.Max(65, inner.Width * inner.Height / 45);
+            int occupiedThreshold = Math.Max(65, contentRegion.Width * contentRegion.Height / 45);
             bool occupied = contentPixels >= occupiedThreshold;
             string? equippedName;
             using (var icon = cap.Clone(inner, PixelFormat.Format32bppArgb))
@@ -7000,12 +7016,13 @@ namespace HD2_Helper
 
         private async Task<bool?> ReadStratagemSelectionMenuState()
         {
+            bool uncertainListCursor = false;
             if (_stratagemRuntime != null)
             {
                 if (MatchStratagemIconFromScreen(out Rectangle selectedBounds) != null)
                     return true;
                 // A visible list cursor with an uncertain icon is not evidence of a closed menu.
-                if (!selectedBounds.IsEmpty) return null;
+                uncertainListCursor = !selectedBounds.IsEmpty;
             }
             // 전체 화면 OCR은 팀원 카드의 "준비/장비" 같은 글자에 흔들릴 수 있으므로,
             // 먼저 실제 상세 패널 이름줄에서 스트라타젬명이 읽히는지 확인한다.
@@ -7030,14 +7047,16 @@ namespace HD2_Helper
                 || cleanText.Contains("공격")
                 || cleanText.Contains("스트라타젬");
 
-            if (hasSelectionMenuText)
-                return true;
+            return ResolveStratagemMenuState(uncertainListCursor, hasSelectionMenuText,
+                cleanText.Contains("준비") || cleanText.Contains("장비"));
+        }
 
-            // 선택창 위에도 하단 "준비"와 상단 "장비 구성"이 OCR에 같이 잡힐 수 있으므로, 선택창 신호가 없을 때만 준비화면으로 본다.
-            if (cleanText.Contains("준비") || cleanText.Contains("장비"))
-                return false;
-
-            return null;
+        private static bool? ResolveStratagemMenuState(bool uncertainListCursor, bool menuEvidence, bool prepEvidence)
+        {
+            // Menu presence does not require knowing the highlighted item's identity.
+            if (menuEvidence) return true;
+            if (uncertainListCursor) return null;
+            return prepEvidence ? false : null;
         }
 
         private void TriggerStratagem(int slotIndex)

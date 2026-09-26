@@ -52,3 +52,26 @@ for (int i = 0; i < 10; i++)
 }
 Console.WriteLine($"430x650 in-memory region detection + matching: median={timings.Order().ElementAt(5):F1} ms, max={timings.Max():F1} ms (screen capture and key delays excluded)");
 Console.WriteLine("PASS: production slot detection and cached matching on actual four-slot screenshot; no game input sent");
+using var emptyHeader = new Bitmap(Path.Combine(root, "tests", "LocalVisionChecks", "Fixtures", "equipped-empty.png"));
+var emptyBox = (Rectangle?)find.Invoke(null, new object[] { emptyHeader });
+if (emptyBox == null) throw new Exception("Empty selected slot not located");
+var contentRegionMethod = main.GetMethod("GetEquippedSlotContentRegion", BindingFlags.Static | BindingFlags.NonPublic)!;
+var emptyInner = (Rectangle)contentRegionMethod.Invoke(null, new object[] { emptyBox.Value, emptyHeader.Size })!;
+var classify = main.GetMethod("TryClassifyEquippedSlotContentPixel", BindingFlags.Static | BindingFlags.NonPublic)!;
+int contentCount = 0;
+for (int y = emptyInner.Top; y < emptyInner.Bottom; y++)
+    for (int x = emptyInner.Left; x < emptyInner.Right; x++)
+        if ((bool)classify.Invoke(null, new object[] { emptyHeader.GetPixel(x, y), "" })!) contentCount++;
+Console.WriteLine($"Actual empty slot: bounds={emptyBox}, foregroundPixels={contentCount}");
+if (contentCount != 0) throw new Exception("Empty slot polluted by frame/background");
+var wideEmpty = Rectangle.Inflate(emptyBox.Value, -Math.Max(4, emptyBox.Value.Width / 18), -Math.Max(4, emptyBox.Value.Height / 18));
+using var wideEmptyCrop = emptyHeader.Clone(wideEmpty, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+if (match.Invoke(runtime, new object[] { wideEmptyCrop }) != null) throw new Exception("Empty slot falsely identified as equipment");
+Console.WriteLine("PASS: actual empty slot remains empty despite bright pixels outside its content interior");
+var menuState = main.GetMethod("ResolveStratagemMenuState", BindingFlags.Static | BindingFlags.NonPublic)!;
+foreach (var (cursor, menu, prep, expected) in new[] {
+    (true, true, true, (bool?)true), (true, false, true, (bool?)null),
+    (false, false, true, (bool?)false), (false, false, false, (bool?)null) })
+    if ((bool?)menuState.Invoke(null, new object[] { cursor, menu, prep }) != expected)
+        throw new Exception("Menu identity/presence separation failed");
+Console.WriteLine("PASS: unknown highlighted item cannot suppress positive menu evidence or imply closed menu");

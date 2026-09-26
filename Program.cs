@@ -1748,6 +1748,15 @@ namespace HD2_Helper
                 File.WriteAllText(DefaultExcludedEquipmentVersionPath, DefaultExcludedEquipmentVersion, Encoding.UTF8);
             }
 
+            // 이번에 추가된 무기만 한 번 제외하며, 기존 장비의 해제 상태는 다시 설정하지 않는다.
+            string saiDefaultExcludedPath = Path.Combine(AppDataPath, "disabled-default-las12-sai.txt");
+            if (!File.Exists(saiDefaultExcludedPath))
+            {
+                items.Add("LAS-12 사이");
+                SaveDisabledItems(items);
+                File.WriteAllText(saiDefaultExcludedPath, "1", Encoding.UTF8);
+            }
+
             _disabledItems = items;
             return items.OrderBy(item => item, StringComparer.Ordinal).ToArray();
         }

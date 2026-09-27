@@ -667,6 +667,19 @@
             align-items: center;
         }
 
+        .window-height-row {
+            grid-template-columns: minmax(0, 1fr) 150px;
+        }
+
+        .window-height-row[hidden] { display: none; }
+
+        .window-height-row select,
+        .window-height-row input {
+            width: 100%;
+            min-width: 0;
+            box-sizing: border-box;
+        }
+
         .support-duration-control .crosshair-control {
             /* 입력칸이 버튼 열까지 침범하지 않도록 실제 그리드 폭 안에서 계산한다. */
             box-sizing: border-box;
@@ -1695,6 +1708,23 @@
                     <button class="settings-collapse-btn" id="settings-collapse-btn" type="button" onclick="toggleSettingsPanel()" title="접기/펼치기">−</button>
                 </div>
                 <div class="settings-list">
+                    <label class="crosshair-row window-height-row">
+                        <span class="setting-label">창 높이</span>
+                        <select id="setting-window-size" class="crosshair-select" onchange="selectWindowHeight(this.value)">
+                            <option value="0">자동</option>
+                            <option value="540">소형 · 540px</option>
+                            <option value="630">기본 · 630px</option>
+                            <option value="840">대형 · 840px</option>
+                            <option value="custom">사용자 지정</option>
+                        </select>
+                    </label>
+                    <div class="crosshair-row window-height-row" id="window-custom-height-row" hidden>
+                        <label class="setting-label" for="setting-window-height">높이(px)</label>
+                        <div class="support-duration-control">
+                            <input id="setting-window-height" class="setting-number-control" type="number" min="430" max="2160" step="1" inputmode="numeric" onkeydown="if(event.key === 'Enter'){event.preventDefault();commitWindowHeight();}">
+                            <button class="support-duration-commit" type="button" onclick="commitWindowHeight()" title="창 높이 적용" aria-label="창 높이 적용">↵</button>
+                        </div>
+                    </div>
                     <div class="setting-row" onclick="cycleInputDelaySetting()" oncontextmenu="adjustInputDelaySetting(event, -5)">
                         <span class="setting-label">메뉴 입력 딜레이</span>
                         <button class="setting-value-btn" id="setting-input-delay" type="button" tabindex="-1"></button>
@@ -2117,6 +2147,8 @@
         let suppressPresetClick = false;
         let suppressPresetClickTimer = 0;
         let currentWaitingKeyTarget = null;
+        let currentWindowHeight = 0;
+        let customWindowHeightMode = false;
         let currentInputDelay = 30;
         let currentStratagemCommandInputDelay = 15;
         const baseStratagemSlotCount = 10;
@@ -2389,6 +2421,29 @@
 
         function getStratagemSlotRowCount() {
             return Math.ceil(getStratagemSlotCount() / stratagemSlotsPerRow);
+        }
+
+        function selectWindowHeight(value) {
+            customWindowHeightMode = value === 'custom';
+            document.getElementById('window-custom-height-row').hidden = !customWindowHeightMode;
+            if (customWindowHeightMode) {
+                const input = document.getElementById('setting-window-height');
+                input.value = String(currentWindowHeight || Math.round(window.innerHeight));
+                input.focus();
+                input.select();
+                return;
+            }
+            currentWindowHeight = Number(value);
+            postAppMessage({ type: 'SET_WINDOW_HEIGHT', value: currentWindowHeight });
+        }
+
+        function commitWindowHeight() {
+            const input = document.getElementById('setting-window-height');
+            if (!input.value.trim() || !Number.isFinite(Number(input.value))) return;
+            currentWindowHeight = Math.max(430, Math.min(2160, Math.round(Number(input.value))));
+            input.value = String(currentWindowHeight);
+            input.blur();
+            postAppMessage({ type: 'SET_WINDOW_HEIGHT', value: currentWindowHeight });
         }
 
         function updateAdditionalStratagemSlots(value) {
@@ -2908,6 +2963,15 @@
             }
 
             currentInputDelay = data.inputDelay ?? 30;
+            currentWindowHeight = Number(data.windowClientHeight) || 0;
+            const windowSizeControl = document.getElementById('setting-window-size');
+            const customHeightInput = document.getElementById('setting-window-height');
+            const presetHeight = [0, 540, 630, 840].includes(currentWindowHeight);
+            if (document.activeElement !== customHeightInput) {
+                windowSizeControl.value = customWindowHeightMode || !presetHeight ? 'custom' : String(currentWindowHeight);
+                document.getElementById('window-custom-height-row').hidden = windowSizeControl.value !== 'custom';
+                customHeightInput.value = String(currentWindowHeight || 630);
+            }
             updateInputDelayLabel(currentInputDelay);
             currentStratagemCommandInputDelay = data.stratagemCommandInputDelay ?? 15;
             updateStratagemCommandInputDelayLabel(currentStratagemCommandInputDelay);

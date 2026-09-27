@@ -199,6 +199,7 @@ namespace HD2_Helper
         private const double StratagemIconFallbackMinScore = 0.65;
         private int _layoutClientWidth = BaseClientWidth;
         private bool _isAdjustingClientSize;
+        private static int _windowClientHeight;
 
         private static List<(string Type, string Category, string Name)> _parsedData = new();
         private static Dictionary<string, Image?> _imageCache = new();
@@ -516,6 +517,9 @@ namespace HD2_Helper
 
         private static Size GetInitialClientSize()
         {
+            if (_windowClientHeight > 0)
+                return WindowHeightSizing.Calculate(_windowClientHeight, BaseClientWidth, CurrentBaseClientHeight,
+                    Screen.PrimaryScreen!.WorkingArea.Size);
             Rectangle bounds = Screen.PrimaryScreen!.Bounds;
             double scale = Math.Min(
                 (double)bounds.Width / BaseReferenceWidth,
@@ -593,6 +597,12 @@ namespace HD2_Helper
                 (int)Math.Round(CurrentBaseClientHeight * MinClientScale)
             ));
 
+            if (_windowClientHeight > 0)
+            {
+                ApplyConfiguredWindowHeight();
+                return;
+            }
+
             if (ClientSize == nextSize) return;
 
             _isAdjustingClientSize = true;
@@ -618,6 +628,12 @@ namespace HD2_Helper
                 (int)Math.Round(_layoutClientWidth * MinClientScale),
                 (int)Math.Round(CurrentBaseClientHeight * MinClientScale)
             ));
+
+            if (_windowClientHeight > 0)
+            {
+                ApplyConfiguredWindowHeight();
+                return;
+            }
 
             if (ClientSize == nextSize) return;
 
@@ -648,6 +664,32 @@ namespace HD2_Helper
 
             // 테두리 없는 자식 창에서는 창 크기와 클라이언트 크기가 같으므로 관리 좌표도 항상 부모 원점으로 갱신한다.
             SetBounds(0, 0, nextClientSize.Width, nextClientSize.Height, BoundsSpecified.All);
+        }
+
+        private void ApplyConfiguredWindowHeight()
+        {
+            if (WindowState != FormWindowState.Normal) return;
+            Size available = Screen.FromControl(this).WorkingArea.Size;
+            available.Width -= Width - ClientSize.Width;
+            // 업데이터의 상단 42px, 하단 34px 영역까지 같은 화면 안에 들어가야 한다.
+            available.Height -= Height - ClientSize.Height + (_embeddedParentHandle != IntPtr.Zero ? 76 : 0);
+            Size nextSize = WindowHeightSizing.Calculate(_windowClientHeight, _layoutClientWidth,
+                CurrentBaseClientHeight, available, _embeddedParentHandle != IntPtr.Zero ? 760 : 0,
+                _embeddedParentHandle != IntPtr.Zero ? 430 : 0);
+            _isAdjustingClientSize = true;
+            try
+            {
+                MinimumSize = SizeFromClientSize(new Size(Math.Min(nextSize.Width, (int)Math.Round(_layoutClientWidth * MinClientScale)),
+                    Math.Min(nextSize.Height, (int)Math.Round(CurrentBaseClientHeight * MinClientScale))));
+                ApplyClientSizePreservingEmbeddedOrigin(nextSize);
+                if (_embeddedParentHandle == IntPtr.Zero)
+                {
+                    Rectangle area = Screen.FromControl(this).WorkingArea;
+                    Location = new Point(Math.Clamp(Left, area.Left, Math.Max(area.Left, area.Right - Width)),
+                        Math.Clamp(Top, area.Top, Math.Max(area.Top, area.Bottom - Height)));
+                }
+            }
+            finally { _isAdjustingClientSize = false; }
         }
 
         private async void Initialization()
@@ -1271,6 +1313,25 @@ namespace HD2_Helper
                     {
                         this.Show();
                         this.Activate();
+                    }
+                }
+                else if (type == "SET_WINDOW_HEIGHT")
+                {
+                    if (doc.RootElement.TryGetProperty("value", out var valueElement) && valueElement.TryGetInt32(out int value))
+                    {
+                        _windowClientHeight = WindowHeightSizing.Normalize(value);
+                        if (_windowClientHeight > 0) ApplyConfiguredWindowHeight();
+                        else
+                        {
+                            _isAdjustingClientSize = true;
+                            ApplyClientSizePreservingEmbeddedOrigin(GetInitialClientSize());
+                            _isAdjustingClientSize = false;
+                            ApplyScaledClientWidth(_layoutClientWidth);
+                        }
+                        foreach (var editor in Application.OpenForms.OfType<HelperEditorWindow>().ToArray())
+                            editor.ApplyConfiguredWindowHeight();
+                        SaveSetting();
+                        SendSettingsToWeb();
                     }
                 }
                 else if (type == "SET_INPUT_DELAY")
@@ -2042,6 +2103,10 @@ namespace HD2_Helper
                 {
                     if (int.TryParse(value, out int delay)) _stratagemCommandInputDelay = Math.Clamp(delay, 5, 100);
                 }
+                else if (key.Equals("windowClientHeight", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (int.TryParse(value, out int height)) _windowClientHeight = WindowHeightSizing.Normalize(height);
+                }
                 else if (key.Equals("additionalStratagemSlots", StringComparison.OrdinalIgnoreCase))
                 {
                     if (int.TryParse(value, out int slotCount))
@@ -2221,6 +2286,7 @@ namespace HD2_Helper
                 $"inputDelay={Math.Clamp(_inputDelay, 30, 100)}",
                 $"stratagemCommandInputDelay={Math.Clamp(_stratagemCommandInputDelay, 5, 100)}",
                 $"additionalStratagemSlots={_additionalStratagemSlots}",
+                $"windowClientHeight={_windowClientHeight}",
                 $"stratagemCompactLayout={(_stratagemCompactLayout ? 1 : 0)}",
                 $"useLegacyEquipmentLayout={(_useLegacyEquipmentLayout ? 1 : 0)}",
                 $"stratagemReselectEnabled={(_stratagemReselectEnabled ? 1 : 0)}",
@@ -2477,6 +2543,7 @@ namespace HD2_Helper
                 inputDelay = Math.Clamp(_inputDelay, 30, 100),
                 stratagemCommandInputDelay = Math.Clamp(_stratagemCommandInputDelay, 5, 100),
                 additionalStratagemSlots = _additionalStratagemSlots,
+                windowClientHeight = _windowClientHeight,
                 stratagemCompactLayout = _stratagemCompactLayout,
                 useLegacyEquipmentLayout = _useLegacyEquipmentLayout,
                 stratagemReselectEnabled = _stratagemReselectEnabled,
@@ -7924,6 +7991,12 @@ namespace HD2_Helper
                     (int)Math.Round(CurrentBaseClientHeight * MinClientScale)
                 ));
 
+                if (_windowClientHeight > 0)
+                {
+                    ApplyConfiguredWindowHeight();
+                    return;
+                }
+
                 if (ClientSize == nextSize) return;
 
                 isAdjustingClientSize = true;
@@ -7950,11 +8023,37 @@ namespace HD2_Helper
                     (int)Math.Round(CurrentBaseClientHeight * MinClientScale)
                 ));
 
+                if (_windowClientHeight > 0)
+                {
+                    ApplyConfiguredWindowHeight();
+                    return;
+                }
+
                 if (ClientSize == nextSize) return;
 
                 isAdjustingClientSize = true;
                 ClientSize = nextSize;
                 isAdjustingClientSize = false;
+            }
+
+            public void ApplyConfiguredWindowHeight()
+            {
+                Size automaticSize = GetInitialClientSize();
+                Size nextSize = _windowClientHeight > 0
+                    ? WindowHeightSizing.Calculate(_windowClientHeight, layoutClientWidth, CurrentBaseClientHeight,
+                        Screen.FromControl(this).WorkingArea.Size)
+                    : new Size((int)Math.Round(automaticSize.Height * layoutClientWidth / (double)CurrentBaseClientHeight), automaticSize.Height);
+                isAdjustingClientSize = true;
+                try
+                {
+                    MinimumSize = new Size(Math.Min(nextSize.Width, (int)Math.Round(layoutClientWidth * MinClientScale)),
+                        Math.Min(nextSize.Height, (int)Math.Round(CurrentBaseClientHeight * MinClientScale)));
+                    ClientSize = nextSize;
+                    Rectangle area = Screen.FromControl(this).WorkingArea;
+                    Location = new Point(Math.Clamp(Left, area.Left, Math.Max(area.Left, area.Right - Width)),
+                        Math.Clamp(Top, area.Top, Math.Max(area.Top, area.Bottom - Height)));
+                }
+                finally { isAdjustingClientSize = false; }
             }
         }
         public class PresetOverlayForm : Form

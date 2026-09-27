@@ -118,3 +118,36 @@ var railgunInterior = Rectangle.Inflate(railgunBox.Value, -Math.Max(4, railgunBo
 using var railgunIcon = railgunList.Clone(railgunInterior, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
 Console.WriteLine(string.Join(", ", ((ValueTuple<string, float>[])runtimeType.GetMethod("Rank")!.Invoke(runtime, new object[] { railgunIcon })!).Select(s => $"{s.Item1}={s.Item2:F3}")));
 if ((string?)match.Invoke(runtime, new object[] { railgunIcon }) != "레일건") throw new Exception("Dim equipped railgun not recognized");
+
+using var harpoonScreen = new Bitmap(Path.Combine(root, "tests", "LocalVisionChecks", "Fixtures", "selected-harpoon-screen.png"));
+using var harpoonList = harpoonScreen.Clone(new Rectangle(73, 520, 573, 867), System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+var harpoonBox = (Rectangle?)find.Invoke(null, new object[] { harpoonList });
+if (harpoonBox == null) throw new Exception("Harpoon highlight missing");
+var harpoonInterior = Rectangle.Inflate(harpoonBox.Value, -Math.Max(4, harpoonBox.Value.Width / 18), -Math.Max(4, harpoonBox.Value.Height / 18));
+using var harpoonIcon = harpoonList.Clone(harpoonInterior, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+Console.WriteLine($"Harpoon bounds={harpoonBox}; " + string.Join(", ", ((ValueTuple<string, float>[])runtimeType.GetMethod("Rank")!.Invoke(runtime, new object[] { harpoonIcon })!).Select(s => $"{s.Item1}={s.Item2:F3}")));
+if ((string?)match.Invoke(runtime, new object[] { harpoonIcon }) != "작살총") throw new Exception("Highlighted harpoon not recognized");
+foreach (int inset in new[] { 4, 6, 8 })
+{
+    using var insetIcon = harpoonList.Clone(Rectangle.Inflate(harpoonBox.Value, -inset, -inset), System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+    if ((string?)match.Invoke(runtime, new object[] { insetIcon }) != "작살총") throw new Exception("Harpoon crop margin failed");
+}
+int variants = 0;
+foreach (string name in names)
+{
+    using var original = new Bitmap(Path.Combine(root, "images", "Stratagems", name + ".png"));
+    foreach (int size in new[] { 48, 72, 96 })
+    {
+        using var reduced = new Bitmap(size, size);
+        using (var g = Graphics.FromImage(reduced))
+        {
+            g.Clear(Color.FromArgb(33, 33, 33));
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            g.DrawImage(original, new Rectangle(3, 3, size - 6, size - 6));
+        }
+        string? found = (string?)match.Invoke(runtime, new object[] { reduced });
+        if (found != null && found != name) throw new Exception($"Wrong reduced icon: {name} -> {found} at {size}px");
+        variants++;
+    }
+}
+Console.WriteLine($"PASS: actual highlighted harpoon, crop margins and {variants} reduced-icon negative-regression checks; no game input sent");

@@ -4,7 +4,7 @@ namespace HD2_Helper;
 internal sealed class StratagemIconMatcher
 {
     private const int Size = 48;
-    private readonly Dictionary<string, float[][]> _references = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, float[][][]> _references = new(StringComparer.OrdinalIgnoreCase);
 
     public void Remove(string path) => _references.Remove(path);
 
@@ -12,7 +12,20 @@ internal sealed class StratagemIconMatcher
     {
         if (_references.ContainsKey(path)) return;
         using var bitmap = new Bitmap(path);
-        _references[path] = Extract(bitmap);
+        var variants = new List<float[][]> { Extract(bitmap) };
+        // Match the rasterization of small game icons without relaxing identity confidence.
+        foreach (int size in new[] { 48, 96 })
+        {
+            using var small = new Bitmap(size, size);
+            using (var g = Graphics.FromImage(small))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                g.DrawImage(bitmap, new Rectangle(0, 0, size, size));
+            }
+            variants.Add(Extract(small));
+        }
+        _references[path] = variants.ToArray();
     }
 
     internal static float[][] Extract(Bitmap image)
@@ -34,7 +47,8 @@ internal sealed class StratagemIconMatcher
             brightCount += neutralHistogram[level];
             if (brightCount >= Math.Max(4, image.Width * image.Height / 400)) break;
         }
-        int whiteThreshold = Math.Clamp((int)(level * .72), 75, 150);
+        // Retain dim antialiased edges that carry the skull/arrow detail in tiny HUD glyphs.
+        int whiteThreshold = Math.Clamp((int)(level * .5), 55, 110);
         double brightness = Math.Clamp(level / 220.0, .4, 1);
         for (int channel = 0; channel < 2; channel++)
         {
@@ -75,7 +89,11 @@ internal sealed class StratagemIconMatcher
     public float Compare(float[][] query, string path)
     {
         Prepare(path);
-        var reference = _references[path];
+        return _references[path].Max(reference => CompareMasks(query, reference));
+    }
+
+    private static float CompareMasks(float[][] query, float[][] reference)
+    {
         float score = 0;
         for (int channel = 0; channel < 2; channel++)
         {

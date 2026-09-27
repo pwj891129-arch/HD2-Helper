@@ -109,3 +109,12 @@ using (var pen = new Pen(Color.Yellow, 3))
 }
 if (find.Invoke(null, new object[] { incompleteFrame }) != null) throw new Exception("Incomplete frame accepted");
 Console.WriteLine("PASS: initial empty screenshot and list cursor recognized; incomplete border rejected");
+using var railgunScreen = new Bitmap(Path.Combine(root, "tests", "LocalVisionChecks", "Fixtures", "selected-railgun-screen.png"));
+using var railgunList = railgunScreen.Clone(new Rectangle(73, 520, 573, 867), System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+var railgunBox = (Rectangle?)find.Invoke(null, new object[] { railgunList });
+Console.WriteLine($"Railgun list box={railgunBox}");
+if (railgunBox == null) throw new Exception("Railgun highlight missing");
+var railgunInterior = Rectangle.Inflate(railgunBox.Value, -Math.Max(4, railgunBox.Value.Width / 18), -Math.Max(4, railgunBox.Value.Height / 18));
+using var railgunIcon = railgunList.Clone(railgunInterior, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+Console.WriteLine(string.Join(", ", ((ValueTuple<string, float>[])runtimeType.GetMethod("Rank")!.Invoke(runtime, new object[] { railgunIcon })!).Select(s => $"{s.Item1}={s.Item2:F3}")));
+if ((string?)match.Invoke(runtime, new object[] { railgunIcon }) != "레일건") throw new Exception("Dim equipped railgun not recognized");

@@ -2,7 +2,8 @@ namespace HD2_Helper;
 
 internal static class SelectionFrameDetector
 {
-    private static bool Yellow(Color c) => c.R > 175 && c.G > 145 && c.B < 95 && c.R - c.B > 100;
+    private static bool Yellow(Color c) => c.R >= 70 && c.G >= 65 && c.G >= c.R * .65
+        && c.G <= c.R * 1.2 && c.B < Math.Min(c.R, c.G) * .6;
 
     private static List<(int Start, int End)> Bands(IEnumerable<int> positions)
     {

@@ -19,6 +19,23 @@ internal sealed class StratagemIconMatcher
     {
         var result = new float[2][];
         var pixels = new IconPixelSnapshot(image);
+        var neutralHistogram = new int[256];
+        for (int y = 0; y < image.Height; y++)
+            for (int x = 0; x < image.Width; x++)
+            {
+                var c = pixels.GetPixel(x, y);
+                int min = Math.Min(c.R, Math.Min(c.G, c.B));
+                int max = Math.Max(c.R, Math.Max(c.G, c.B));
+                if (c.A >= 128 && max - min <= 40) neutralHistogram[min]++;
+            }
+        int level = 255, brightCount = 0;
+        for (; level > 0; level--)
+        {
+            brightCount += neutralHistogram[level];
+            if (brightCount >= Math.Max(4, image.Width * image.Height / 400)) break;
+        }
+        int whiteThreshold = Math.Clamp((int)(level * .72), 75, 150);
+        double brightness = Math.Clamp(level / 220.0, .4, 1);
         for (int channel = 0; channel < 2; channel++)
         {
             using var mask = new Bitmap(image.Width, image.Height);
@@ -30,9 +47,9 @@ internal sealed class StratagemIconMatcher
                     int min = Math.Min(c.R, Math.Min(c.G, c.B));
                     int max = Math.Max(c.R, Math.Max(c.G, c.B));
                     bool foreground = c.A >= 128 && (channel == 0
-                        ? min >= 150 && max - min <= 65
-                        : (c.G >= 70 && c.B >= 70 && c.G - c.R >= 25 && c.B - c.R >= 25)
-                          || (c.R >= 100 && c.R - c.G >= 35 && c.R - c.B >= 35));
+                        ? min >= whiteThreshold && max - min <= 65 * brightness
+                        : (c.G >= 70 * brightness && c.B >= 70 * brightness && c.G - c.R >= 25 * brightness && c.B - c.R >= 25 * brightness)
+                          || (c.R >= 100 * brightness && c.R - c.G >= 35 * brightness && c.R - c.B >= 35 * brightness));
                     if (!foreground) continue;
                     mask.SetPixel(x, y, Color.White);
                     left = Math.Min(left, x); top = Math.Min(top, y);

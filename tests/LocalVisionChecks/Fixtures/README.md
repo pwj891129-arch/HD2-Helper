@@ -37,3 +37,10 @@ proximity grouping included yellow decoration above slot 1 and returned
 frame detection returns (13,34,107,106), zero interior content, and correctly
 identifies Orbital Precision Strike in the separate list ROI. Incomplete frames
 are rejected instead of falling back to proximity grouping.
+
+`selected-railgun-screen.png` captures an equipped railgun dimmed in the list.
+Fixed bright-yellow/white thresholds missed both its border and identity. Frame
+detection now allows dim yellow by channel ratios, still requiring four sides.
+Icon masks use a bounded brightness estimate from neutral highlights. The runtime
+confidence/margin gates are unchanged. Regression checks include dimmed versions
+of both similar shield HUD captures, not just the railgun example.

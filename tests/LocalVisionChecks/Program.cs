@@ -95,6 +95,17 @@ internal static class Checks
             timer.Restart();
             Assert(runtime.Match(capture) == expected, "runtime strict HUD: " + expected);
             Console.WriteLine($"Runtime HUD recognition: {timer.ElapsedMilliseconds} ms");
+            foreach (float factor in new[] { .55f, .75f })
+            {
+                using var dim = new Bitmap(capture.Width, capture.Height);
+                using (var attributes = new System.Drawing.Imaging.ImageAttributes())
+                using (var g = Graphics.FromImage(dim))
+                {
+                    attributes.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix00 = factor, Matrix11 = factor, Matrix22 = factor });
+                    g.DrawImage(capture, new Rectangle(Point.Empty, dim.Size), 0, 0, capture.Width, capture.Height, GraphicsUnit.Pixel, attributes);
+                }
+                Assert(runtime.Match(dim) == expected, $"dim similar shield {factor}: {expected}");
+            }
         }
         foreach (string name in new[] { "방향 방패", "방어막 생성 팩", "탄도 방패 배낭", "가드 독", "로버", "핫도그", "작살총", "M-102 포격 FRV", "벌목꾼", "바스티온 MK XVI", "이글 가스 공중타격" })
         {

@@ -5285,10 +5285,12 @@ namespace HD2_Helper
                 }
 
                 using Bitmap crop = capture.Clone(inner, PixelFormat.Format32bppArgb);
-                string? matchedName = _stratagemRuntime?.Match(crop);
+                var rankedIcons = _stratagemRuntime?.Rank(crop);
+                string? matchedName = rankedIcons == null ? null : StratagemRuntimeRecognizer.Choose(rankedIcons);
                 Rectangle absoluteSlot = new(searchRegion.Left + selectedSlot.Value.Left, searchRegion.Top + selectedSlot.Value.Top, selectedSlot.Value.Width, selectedSlot.Value.Height);
                 selectedBounds = absoluteSlot;
-                _lastIconMatchDebugLine = $"cached-detail-icon, selectedSlot={FormatRectangle(absoluteSlot)}, matched={(matchedName ?? "(uncertain)")}";
+                string candidateDetails = rankedIcons == null ? "(not-ready)" : string.Join(",", rankedIcons.Take(2).Select(c => $"{c.Name}={c.Score:F3}"));
+                _lastIconMatchDebugLine = $"cached-detail-icon, selectedSlot={FormatRectangle(absoluteSlot)}, matched={(matchedName ?? "(uncertain)")}, candidates={candidateDetails}";
                 return matchedName;
             }
             catch (Exception ex)
@@ -6022,7 +6024,7 @@ namespace HD2_Helper
                 void AbortReselection(string reason)
                 {
                     LogAutoSelectionDebug("abort=reselection-plan: " + reason);
-                    Logger.Log("자동 재선택 중단: " + reason);
+                    Logger.Log("자동 재선택 중단: " + reason + " | " + _lastIconMatchDebugLine);
                     if (!IsDisposed)
                         BeginInvoke(new Action(() => MessageBox.Show(this, reason, "스트라타젬 재선택 중단", MessageBoxButtons.OK, MessageBoxIcon.Warning)));
                 }

@@ -75,3 +75,37 @@ foreach (var (cursor, menu, prep, expected) in new[] {
     if ((bool?)menuState.Invoke(null, new object[] { cursor, menu, prep }) != expected)
         throw new Exception("Menu identity/presence separation failed");
 Console.WriteLine("PASS: unknown highlighted item cannot suppress positive menu evidence or imply closed menu");
+using var initialScreen = new Bitmap(Path.Combine(root, "tests", "LocalVisionChecks", "Fixtures", "empty-initial-screen.png"));
+var headerRect = new Rectangle(60, 333, 480, 200);
+using var initialHeader = initialScreen.Clone(headerRect, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+var initialBox = (Rectangle?)find.Invoke(null, new object[] { initialHeader });
+Console.WriteLine($"Initial empty screen selected header={initialBox}");
+if (initialBox == null) throw new Exception("Initial empty selected header not found");
+var initialInterior = (Rectangle)contentRegionMethod.Invoke(null, new object[] { initialBox.Value, initialHeader.Size })!;
+int initialPixels = 0;
+for (int y = initialInterior.Top; y < initialInterior.Bottom; y++)
+    for (int x = initialInterior.Left; x < initialInterior.Right; x++)
+        if ((bool)classify.Invoke(null, new object[] { initialHeader.GetPixel(x, y), "" })!) initialPixels++;
+Console.WriteLine($"Initial empty foreground={initialPixels}, interior={initialInterior}");
+if (initialPixels != 0) throw new Exception("Initial empty content polluted");
+if ((initialBox.Value.Left + initialBox.Value.Width / 2) * 4 / initialHeader.Width != 0)
+    throw new Exception("Wrong initial slot index");
+using var initialList = initialScreen.Clone(new Rectangle(73, 520, 573, 867), System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+var listBox = (Rectangle?)find.Invoke(null, new object[] { initialList });
+if (listBox == null) throw new Exception("Initial highlighted list item not located");
+var listInterior = Rectangle.Inflate(listBox.Value, -Math.Max(4, listBox.Value.Width / 18), -Math.Max(4, listBox.Value.Height / 18));
+using var initialIcon = initialList.Clone(listInterior, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+var initialName = (string?)match.Invoke(runtime, new object[] { initialIcon });
+Console.WriteLine($"Initial list highlight={listBox}, item={initialName ?? "uncertain"}");
+if (initialName != "궤도 정밀 타격") throw new Exception("Initial cursor identity failed");
+using var incompleteFrame = new Bitmap(200, 180);
+using (var g = Graphics.FromImage(incompleteFrame))
+using (var pen = new Pen(Color.Yellow, 3))
+{
+    g.Clear(Color.FromArgb(33, 33, 33));
+    g.DrawLine(pen, 40, 40, 140, 40);
+    g.DrawLine(pen, 40, 40, 40, 140);
+    g.DrawLine(pen, 140, 40, 140, 140);
+}
+if (find.Invoke(null, new object[] { incompleteFrame }) != null) throw new Exception("Incomplete frame accepted");
+Console.WriteLine("PASS: initial empty screenshot and list cursor recognized; incomplete border rejected");

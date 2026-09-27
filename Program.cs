@@ -6597,24 +6597,9 @@ namespace HD2_Helper
 
         private static List<Rectangle> FindSelectedSlotCandidates(Bitmap capture, out int yellowComponentCount)
         {
-            var bitmap = new IconPixelSnapshot(capture);
-            var yellowComponents = new List<(Rectangle Rect, int Pixels)>();
-            bool[,] visited = new bool[bitmap.Width, bitmap.Height];
-            for (int y = 0; y < bitmap.Height; y++)
-            {
-                for (int x = 0; x < bitmap.Width; x++)
-                {
-                    if (visited[x, y] || !IsSelectionYellow(bitmap.GetPixel(x, y)))
-                        continue;
-
-                    Rectangle component = FloodFillYellowComponent(bitmap, visited, x, y, out int pixelCount);
-                    if (pixelCount >= 4 && component.Width <= 170 && component.Height <= 170)
-                        yellowComponents.Add((component, pixelCount));
-                }
-            }
-
-            yellowComponentCount = yellowComponents.Count;
-            return BuildSelectedSlotCandidates(yellowComponents, bitmap, bitmap.Size);
+            // No proximity-only fallback: decorations are not evidence of a selected slot.
+            yellowComponentCount = 0;
+            return SelectionFrameDetector.Find(new IconPixelSnapshot(capture));
         }
 
         private static Rectangle? ChooseSelectedSlotCandidate(List<Rectangle> candidates)

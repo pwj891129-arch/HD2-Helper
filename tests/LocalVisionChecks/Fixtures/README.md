@@ -30,3 +30,10 @@ empty slot. Version .12's wide foreground crop reports 52 content pixels from it
 surroundings. Version .13 retains the wide icon comparison but uses the original
 inset interior for emptiness, which correctly reports zero. RuntimeSelectionChecks
 also verifies the empty crop is not identified as an equipment icon.
+
+`empty-initial-screen.png` is the user's 2561x1440 failure screenshot. The old
+proximity grouping included yellow decoration above slot 1 and returned
+(1,0,144,142) within the header ROI, with 52 spurious content pixels. Four-sided
+frame detection returns (13,34,107,106), zero interior content, and correctly
+identifies Orbital Precision Strike in the separate list ROI. Incomplete frames
+are rejected instead of falling back to proximity grouping.
